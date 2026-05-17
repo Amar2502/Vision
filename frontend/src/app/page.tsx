@@ -26,6 +26,9 @@ interface FeedItem {
   category?: string;
   media_url?: string;
   media?: string;
+  country?: string[] | null;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 interface EarthquakeEvent {
@@ -60,7 +63,7 @@ interface FlightEvent {
   vertical_rate?: number | null;
 }
 
-type HazardTab = "earthquake" | "wildfire" | "flight";
+type HazardTab = "news" | "earthquake" | "wildfire" | "flight";
 
 interface TabMeta {
   subtitle: string;
@@ -70,9 +73,21 @@ interface TabMeta {
   loading: string;
   overlayText: string;
   eventLabel: string;
+  eventLabelPlural: string;
 }
 
 const TAB_META: Record<HazardTab, TabMeta> = {
+  news: {
+    subtitle:
+      "Geotagged headlines \u00b7 today's feeds \u00b7 RSS sources",
+    endpoint: "/feeds",
+    empty: "No geotagged stories yet.",
+    fail: "Failed to load news data.",
+    loading: "Loading news data\u2026",
+    overlayText: "Fetching news feed",
+    eventLabel: "story",
+    eventLabelPlural: "stories",
+  },
   earthquake: {
     subtitle: "Magnitude \u2265 2.5 \u00b7 last 48 hours \u00b7 USGS",
     endpoint: "/earthquakes",
@@ -81,6 +96,7 @@ const TAB_META: Record<HazardTab, TabMeta> = {
     loading: "Loading earthquake data\u2026",
     overlayText: "Fetching seismic feed",
     eventLabel: "event",
+    eventLabelPlural: "events",
   },
   wildfire: {
     subtitle: "Active wildfires worldwide \u00b7 NASA EONET",
@@ -90,6 +106,7 @@ const TAB_META: Record<HazardTab, TabMeta> = {
     loading: "Loading wildfire data\u2026",
     overlayText: "Fetching wildfire feed",
     eventLabel: "fire",
+    eventLabelPlural: "fires",
   },
   flight: {
     subtitle: "Live aircraft over India \u00b7 OpenSky Network",
@@ -99,11 +116,13 @@ const TAB_META: Record<HazardTab, TabMeta> = {
     loading: "Loading flight data\u2026",
     overlayText: "Fetching flight feed",
     eventLabel: "flight",
+    eventLabelPlural: "flights",
   },
 };
 
-const HAZARD_TABS: HazardTab[] = ["earthquake", "wildfire", "flight"];
+const HAZARD_TABS: HazardTab[] = ["news", "earthquake", "wildfire", "flight"];
 const TAB_LABEL: Record<HazardTab, string> = {
+  news: "News",
   earthquake: "Earthquakes",
   wildfire: "Wildfires",
   flight: "Flights",
@@ -123,6 +142,8 @@ const PLANE_SVG_PATH =
  */
 
 const PANEL_BG: Record<HazardTab, string> = {
+  news:
+    "bg-[#11151f] bg-[linear-gradient(180deg,rgba(34,197,94,0.05),transparent_30%)]",
   earthquake:
     "bg-[#11151f] bg-[linear-gradient(180deg,rgba(56,189,248,0.04),transparent_30%)]",
   wildfire:
@@ -132,6 +153,8 @@ const PANEL_BG: Record<HazardTab, string> = {
 };
 
 const ACCENT_BAR: Record<HazardTab, string> = {
+  news:
+    "before:bg-[linear-gradient(90deg,transparent,#22c55e_20%,#22c55e_80%,transparent)]",
   earthquake:
     "before:bg-[linear-gradient(90deg,transparent,#38bdf8_20%,#38bdf8_80%,transparent)]",
   wildfire:
@@ -141,6 +164,8 @@ const ACCENT_BAR: Record<HazardTab, string> = {
 };
 
 const TAB_ACTIVE: Record<HazardTab, string> = {
+  news:
+    "text-[#22c55e] bg-[rgba(34,197,94,0.10)] border-[rgba(34,197,94,0.40)] shadow-[0_0_12px_rgba(34,197,94,0.25)_inset]",
   earthquake:
     "text-[#38bdf8] bg-[rgba(56,189,248,0.10)] border-[rgba(56,189,248,0.40)] shadow-[0_0_12px_rgba(56,189,248,0.25)_inset]",
   wildfire:
@@ -150,12 +175,14 @@ const TAB_ACTIVE: Record<HazardTab, string> = {
 };
 
 const SPINNER_COLOR: Record<HazardTab, string> = {
+  news: "text-[#22c55e]",
   earthquake: "text-[#38bdf8]",
   wildfire: "text-[#f97316]",
   flight: "text-[#a78bfa]",
 };
 
 const STATUS_DOT: Record<HazardTab, string> = {
+  news: "before:bg-[#22c55e]",
   earthquake: "before:bg-[#38bdf8]",
   wildfire: "before:bg-[#f97316]",
   flight: "before:bg-[#a78bfa]",
@@ -307,6 +334,31 @@ function loadLeaflet(): Promise<unknown> {
 /* ---------- Tab icons ---------- */
 
 function TabIcon({ tab }: { tab: HazardTab }) {
+  if (tab === "news") {
+    return (
+      <svg
+        className="w-3.5 h-3.5 shrink-0"
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+      >
+        <circle
+          cx="12"
+          cy="12"
+          r="9"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+        />
+        <path
+          d="M3 12 H21 M12 3 C15 6.5 15 17.5 12 21 M12 3 C9 6.5 9 17.5 12 21"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
   if (tab === "earthquake") {
     return (
       <svg
@@ -451,31 +503,38 @@ export default function VisionDashboard() {
   const [feedsError, setFeedsError] = useState(false);
 
   /* ----- Hazard state ----- */
-  const [activeTab, setActiveTab] = useState<HazardTab>("earthquake");
+  const [activeTab, setActiveTab] = useState<HazardTab>("news");
   const [hazardCount, setHazardCount] = useState<string>("\u2014");
   const [hazardStatus, setHazardStatus] = useState<string>(
-    TAB_META.earthquake.loading
+    TAB_META.news.loading
   );
   const [hazardError, setHazardError] = useState(false);
   const [overlayActive, setOverlayActive] = useState(true);
   const [overlayText, setOverlayText] = useState<string>(
-    TAB_META.earthquake.overlayText
+    TAB_META.news.overlayText
   );
   const [refreshing, setRefreshing] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
 
   /* ----- Map / cache refs ----- */
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const layerRef = useRef<any>(null);
   const activeTabRef = useRef<HazardTab>(activeTab);
+  // True when the next news render should refit the map view to markers.
+  // We refit on initial mount and when switching to the news tab, but skip
+  // it on background data refreshes so the user's pan/zoom is preserved.
+  const newsNeedsFitRef = useRef<boolean>(true);
 
   const cacheRef = useRef<{
+    news: FeedItem[];
     earthquake: EarthquakeEvent[];
     wildfire: WildfireEvent[];
     flight: FlightEvent[];
-  }>({ earthquake: [], wildfire: [], flight: [] });
+  }>({ news: [], earthquake: [], wildfire: [], flight: [] });
 
   const loadedRef = useRef<Record<HazardTab, boolean>>({
+    news: false,
     earthquake: false,
     wildfire: false,
     flight: false,
@@ -764,6 +823,116 @@ export default function VisionDashboard() {
     [fitMapToBounds]
   );
 
+  const renderNews = useCallback(
+    (items: FeedItem[], opts: { refit?: boolean } = {}) => {
+      const { refit = true } = opts;
+      const L = window.L;
+      const layer = layerRef.current;
+      if (!L || !layer) return;
+
+      layer.clearLayers();
+      const bounds: [number, number][] = [];
+
+      // Cluster feeds that share a country (same lat/lon) so multiple
+      // stories don't pile up into a single, illegible stack of dots.
+      const groups = new Map<
+        string,
+        { lat: number; lng: number; country: string; items: FeedItem[] }
+      >();
+
+      for (const item of items) {
+        if (item.latitude == null || item.longitude == null) continue;
+        const key = `${item.latitude.toFixed(3)},${item.longitude.toFixed(3)}`;
+        const countryName =
+          Array.isArray(item.country) && item.country.length
+            ? item.country[item.country.length - 1]
+            : "Unknown";
+
+        const existing = groups.get(key);
+        if (existing) {
+          existing.items.push(item);
+        } else {
+          groups.set(key, {
+            lat: item.latitude,
+            lng: item.longitude,
+            country: countryName,
+            items: [item],
+          });
+        }
+      }
+
+      const newsBadge =
+        "inline-flex items-center justify-center min-w-[34px] py-1 px-2 rounded-md text-[12px] font-extrabold tracking-[0.6px] text-[#0a0d14] bg-[linear-gradient(135deg,#4ade80,#22c55e)]";
+
+      groups.forEach((group) => {
+        const count = group.items.length;
+        // Logarithmic scaling keeps dense countries readable without
+        // letting them dominate the map.
+        const radius = Math.min(14, 5 + Math.log2(count + 1) * 2.4);
+
+        const marker = L.circleMarker([group.lat, group.lng], {
+          radius,
+          color: "#22c55e",
+          fillColor: "#22c55e",
+          fillOpacity: 0.55,
+          weight: 1.5,
+          opacity: 1,
+        });
+
+        const itemsList = group.items
+          .slice(0, 6)
+          .map(
+            (f) => `
+              <a href="${escapeHtml(f.link)}" target="_blank" rel="noopener noreferrer"
+                class="block py-1.5 border-b border-[#1a1f2b] last:border-b-0 text-inherit no-underline transition-colors hover:text-[#22c55e]">
+                <div class="flex items-center gap-1.5 mb-0.5">
+                  <span class="text-[9px] font-bold tracking-[0.6px] uppercase text-[#8a93a6]">${escapeHtml(
+                    f.source || ""
+                  )}</span>
+                  ${
+                    f.category
+                      ? `<span class="text-[9px] text-[#5b6273] tracking-[0.4px]">\u00b7 ${escapeHtml(
+                          f.category
+                        )}</span>`
+                      : ""
+                  }
+                </div>
+                <div class="text-[11.5px] font-medium leading-snug text-[#e6e9ef]">${escapeHtml(
+                  f.title || ""
+                )}</div>
+              </a>`
+          )
+          .join("");
+
+        const moreText =
+          group.items.length > 6
+            ? `<div class="pt-1.5 text-[10px] text-[#5b6273] tracking-[0.4px]">+${
+                group.items.length - 6
+              } more</div>`
+            : "";
+
+        const html = `
+          <div class="${popupCardCls}">
+            <div class="${popupHeadCls}">
+              <span class="${newsBadge}">${escapeHtml(String(count))}</span>
+              <div class="${popupTitleCls}">${escapeHtml(group.country)}</div>
+            </div>
+            <div class="m-0 max-h-[240px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#232a3a] [&::-webkit-scrollbar-thumb]:rounded-[2px]">
+              ${itemsList}
+              ${moreText}
+            </div>
+          </div>`;
+
+        marker.bindPopup(html, { maxWidth: 320 });
+        marker.addTo(layer);
+        bounds.push([group.lat, group.lng]);
+      });
+
+      if (refit) fitMapToBounds(bounds);
+    },
+    [fitMapToBounds]
+  );
+
   /* ----- Orchestration ----- */
 
   const displayCached = useCallback(
@@ -775,21 +944,23 @@ export default function VisionDashboard() {
         renderEarthquakes(list as EarthquakeEvent[], opts);
       } else if (tab === "wildfire") {
         renderWildfires(list as WildfireEvent[], opts);
-      } else {
+      } else if (tab === "flight") {
         renderFlights(list as FlightEvent[], opts);
+      } else {
+        renderNews(list as FeedItem[], opts);
       }
 
       setHazardCount(String(list.length));
       setHazardError(false);
       setHazardStatus(
         list.length
-          ? `${list.length} ${meta.eventLabel}${
-              list.length === 1 ? "" : "s"
+          ? `${list.length} ${
+              list.length === 1 ? meta.eventLabel : meta.eventLabelPlural
             } loaded`
           : meta.empty
       );
     },
-    [renderEarthquakes, renderWildfires, renderFlights]
+    [renderEarthquakes, renderWildfires, renderFlights, renderNews]
   );
 
   const loadHazardTab = useCallback(
@@ -797,6 +968,13 @@ export default function VisionDashboard() {
     // markers visible until the new ones replace them, and swallow
     // transient errors so we don't disrupt the user's view.
     async (tab: HazardTab, force = false, silent = false) => {
+      // News markers are derived from the feeds state. The standalone
+      // feeds effect fetches /feeds on mount and handleRefresh calls
+      // loadFeeds directly on refresh; a dedicated effect below renders
+      // markers whenever (feeds, activeTab, mapReady) change. So there's
+      // nothing for loadHazardTab to do for the news tab itself.
+      if (tab === "news") return;
+
       const meta = TAB_META[tab];
       const isActive = activeTabRef.current === tab;
 
@@ -851,6 +1029,14 @@ export default function VisionDashboard() {
       activeTabRef.current = tab;
       setActiveTab(tab);
       layerRef.current?.clearLayers();
+
+      if (tab === "news") {
+        // Refit the view to news markers on the next render and let
+        // the news effect handle drawing them.
+        newsNeedsFitRef.current = true;
+        requestAnimationFrame(() => mapRef.current?.invalidateSize());
+        return;
+      }
 
       if (loadedRef.current[tab]) {
         displayCached(tab);
@@ -909,6 +1095,7 @@ export default function VisionDashboard() {
 
         mapRef.current = map;
         layerRef.current = L.layerGroup().addTo(map);
+        setMapReady(true);
 
         loadHazardTab(activeTabRef.current);
       })
@@ -942,6 +1129,51 @@ export default function VisionDashboard() {
   useEffect(() => {
     loadFeeds();
   }, [loadFeeds]);
+
+  /* ----- News tab: render markers whenever feeds/tab/map change ----- */
+
+  useEffect(() => {
+    // While feeds are loading, keep the overlay up only for the news tab
+    // (the other tabs manage their own overlays inside loadHazardTab).
+    if (feeds === null) {
+      if (activeTab === "news" && mapReady) {
+        setOverlayText(TAB_META.news.overlayText);
+        setOverlayActive(true);
+        setHazardStatus(TAB_META.news.loading);
+        setHazardError(false);
+        setHazardCount("\u2026");
+      }
+      return;
+    }
+
+    const withCoords = feeds.filter(
+      (f) => f.latitude != null && f.longitude != null
+    );
+    // Keep the cache populated regardless of active tab so a later
+    // switch to "news" can render synchronously via displayCached.
+    cacheRef.current.news = withCoords;
+    loadedRef.current.news = true;
+
+    if (activeTab !== "news" || !mapReady) return;
+
+    const refit = newsNeedsFitRef.current;
+    newsNeedsFitRef.current = false;
+    renderNews(withCoords, { refit });
+
+    const meta = TAB_META.news;
+    setHazardCount(String(withCoords.length));
+    setHazardError(feedsError);
+    setHazardStatus(
+      feedsError
+        ? meta.fail
+        : withCoords.length
+        ? `${withCoords.length} ${
+            withCoords.length === 1 ? meta.eventLabel : meta.eventLabelPlural
+          } mapped`
+        : meta.empty
+    );
+    setOverlayActive(false);
+  }, [feeds, activeTab, mapReady, renderNews, feedsError]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -1149,6 +1381,22 @@ export default function VisionDashboard() {
                 aria-hidden="true"
                 className="absolute left-3 bottom-3 z-400 flex flex-col gap-1.5 max-w-[260px] py-2 px-2.5 rounded-lg border border-[#1f2533] bg-[rgba(15,19,28,0.85)] backdrop-blur-md text-[10px] text-[#8a93a6] pointer-events-none select-none"
               >
+                {activeTab === "news" ? (
+                  <div>
+                    <div className="text-[9px] font-bold tracking-[1.4px] uppercase text-[#5b6273] mb-[3px]">
+                      Stories by country
+                    </div>
+                    <div className="flex items-center flex-wrap gap-1.5">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#22c55e] shadow-[0_0_4px_rgba(34,197,94,0.55)]" />
+                      <span className="mr-2 text-[#e6e9ef]">Few</span>
+                      <span className="inline-block w-2 h-2 rounded-full bg-[#22c55e] shadow-[0_0_5px_rgba(34,197,94,0.6)]" />
+                      <span className="mr-2 text-[#e6e9ef]">Several</span>
+                      <span className="inline-block w-3 h-3 rounded-full bg-[#22c55e] shadow-[0_0_6px_rgba(34,197,94,0.65)]" />
+                      <span className="mr-1.5 text-[#e6e9ef]">Many</span>
+                    </div>
+                  </div>
+                ) : null}
+
                 {activeTab === "earthquake" ? (
                   <div>
                     <div className="text-[9px] font-bold tracking-[1.4px] uppercase text-[#5b6273] mb-[3px]">

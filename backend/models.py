@@ -8,6 +8,9 @@ class feed(BaseModel):
     link: str
     published: str
     category: str
+    country: Optional[List[str]]
+    latitude: Optional[float]
+    longitude: Optional[float]
 
 class Feeds(BaseModel):
     feeds: List[feed]

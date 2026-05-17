@@ -14,38 +14,13 @@ RSS_URLS = [
         "source": "The Hindu",
         "category": "India States"
     },
-    # {
-    #     "url": "https://www.thehindu.com/news/cities/feeder/default.rss",
-    #     "source": "The Hindu",
-    #     "category": "India Cities"
-    # },
-    {
-        "url": "https://www.thehindu.com/opinion/feeder/default.rss",
-        "source": "The Hindu",
-        "category": "Opinion"
-    },
     {
         "url": "https://www.thehindu.com/business/feeder/default.rss",
         "source": "The Hindu",
         "category": "Business"
     },
-    # {
-    #     "url": "https://www.thehindu.com/sport/feeder/default.rss",
-    #     "source": "The Hindu",
-    #     "category": "Sports"
-    # },
-    # {
-    #     "url": "https://www.thehindu.com/sci-tech/science/feeder/default.rss",
-    #     "source": "The Hindu",
-    #     "category": "Science"
-    # },
-    # {
-    #     "url": "https://www.thehindu.com/life-and-style/feeder/default.rss",
-    #     "source": "The Hindu",
-    #     "category": "Life-Style"
-    # },
     {
-        "url": "https://news.google.com/rss/search?q=site:reuters.com+Iran+Reuters+when:24h&hl=en-IN&gl=IN&ceid=IN:en",
+        "url": "https://news.google.com/rss/search?q=site:apnews.com+Iran+Reuters+when:24h&hl=en-IN&gl=IN&ceid=IN:en",
         "source": "Reuters",
         "category": "Iran War"
     },
@@ -60,14 +35,9 @@ RSS_URLS = [
         "category": "Ukraine Russia War"
     },
     {
-        "url": "https://news.google.com/rss/search?q=site:reuters.com+Middle+East+Reuters+when:24h&hl=en-IN&gl=IN&ceid=IN:en",
+        "url": "https://www.aljazeera.com/xml/rss/all.xml",
         "source": "Reuters",
         "category": "Middle East"
-    },
-    {
-        "url": "https://news.google.com/rss/search?q=site:reuters.com+China+Reuters+when:24h&hl=en-IN&gl=IN&ceid=IN:en",
-        "source": "Reuters",
-        "category": "China"
     },
     {
         "url": "https://news.google.com/rss/search?q=site:reuters.com+Artificial+Intelligence+Reuters+when:24h&hl=en-IN&gl=IN&ceid=IN:en",
@@ -80,8 +50,38 @@ RSS_URLS = [
         "category": "Space"
     },
     {
-        "url": "https://news.google.com/rss/search?q=site:reuters.com+Science+Reuters+when:24h&hl=en-IN&gl=IN&ceid=IN:en",
-        "source": "Reuters",
+        "url": "http://feeds.arstechnica.com/arstechnica/science",
+        "source": "Ars Technica",
         "category": "Science"
     },
+    {
+        "url": "https://feeds.bbci.co.uk/news/world/asia/rss.xml",
+        "source": "BBC",
+        "category": "Asia"
+    },
+    {
+        "url": "https://feeds.bbci.co.uk/news/world/africa/rss.xml",
+        "source": "BBC",
+        "category": "Africa"
+    },
+    # {
+    #     "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
+    #     "source": "BBC",
+    #     "category": "Europe"
+    # },
+    {
+        "url": "https://techcrunch.com/feed/",
+        "source": "techcrunch",
+        "category": "Technology"
+    },
+    {
+        "url": "https://www.theverge.com/rss/index.xml",
+        "source": "The Verge",
+        "category": "Technology"
+    },
+    {
+        "url": "https://feeds.arstechnica.com/arstechnica/technology-lab",
+        "source": "Ars Technica",
+        "category": "IT"
+    }
 ]

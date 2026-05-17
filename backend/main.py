@@ -16,17 +16,10 @@ from opensky_api import OpenSkyApi, TokenManager # type: ignore
 
 app = FastAPI()
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-templates = Jinja2Templates(directory="templates")
-
-
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "index.html"
-    )
+@app.get("/")
+def home():
+    return {"message": "Vision Dashboard API"}   
 
 
 @app.get("/feeds")
