@@ -1,7 +1,7 @@
-RSS_URLS = [
+NEWS_URLS = [
     {
-        "url": "https://www.thehindu.com/news/national/feeder/default.rss",
-        "source": "The Hindu",
+        "url": "https://www.firstpost.com/commonfeeds/v1/mfp/rss/india.xml",
+        "source": "Firstpost",
         "category": "India"
     },
     {
@@ -19,11 +19,11 @@ RSS_URLS = [
         "source": "The Hindu",
         "category": "Business"
     },
-    {
-        "url": "https://news.google.com/rss/search?q=site:apnews.com+Iran+Reuters+when:24h&hl=en-IN&gl=IN&ceid=IN:en",
-        "source": "Reuters",
-        "category": "Iran War"
-    },
+    # {
+    #     "url": "https://news.google.com/rss/search?q=site:apnews.com+Iran+Reuters+when:24h&hl=en-IN&gl=IN&ceid=IN:en",
+    #     "source": "Reuters",
+    #     "category": "Iran War"
+    # },
     {
         "url": "https://news.google.com/rss/search?q=site:reuters.com+Israel+Hamas+Reuters+when:24h&hl=en-IN&gl=IN&ceid=IN:en&num=40",
         "source": "Reuters",
@@ -83,5 +83,10 @@ RSS_URLS = [
         "url": "https://feeds.arstechnica.com/arstechnica/technology-lab",
         "source": "Ars Technica",
         "category": "IT"
-    }
+    },
+    {
+        "url": "https://foreignpolicy.com/feed/",
+        "source": "Foreign Policy",
+        "category": "Foreign Policy"
+    },
 ]

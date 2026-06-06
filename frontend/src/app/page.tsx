@@ -1,13 +1,19 @@
 "use client";
 
 import {
-  act,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 declare global {
   interface Window {
@@ -61,6 +67,15 @@ interface FlightEvent {
   true_track?: number | null;
   velocity?: number | null;
   vertical_rate?: number | null;
+}
+
+interface VideoItem {
+  id: string;
+  link: string;
+  title: string;
+  published?: string;
+  summary?: string;
+  source: string;
 }
 
 type HazardTab = "news" | "earthquake" | "wildfire" | "flight";
@@ -405,18 +420,153 @@ function TabIcon({ tab }: { tab: HazardTab }) {
 
 /* ---------- News sub-components ---------- */
 
+function isSummarizableSource(source?: string): boolean {
+  return (source?.trim().toLowerCase() ?? "") !== "reuters";
+}
+
+function SummarizeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M12 3 L13.2 8.8 L19 10 L13.2 11.2 L12 17 L10.8 11.2 L5 10 L10.8 8.8 Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M18 4 L18.6 6.4 L21 7 L18.6 7.6 L18 10 L17.4 7.6 L15 7 L17.4 6.4 Z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+        opacity="0.85"
+      />
+    </svg>
+  );
+}
+
 function NewsItem({ item }: { item: FeedItem }) {
-  const summary = stripTags(item.summary);
+  const rssSummary = stripTags(item.summary);
   const mediaUrl = getMediaUrl(item);
   const recent = isRecent(item.published);
+  const canSummarize = isSummarizableSource(item.source);
+
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [summarizeLoading, setSummarizeLoading] = useState(false);
+  const [summarizeError, setSummarizeError] = useState(false);
+
+  const fetchSummary = useCallback(async () => {
+    if (aiSummary || summarizeLoading) return;
+
+    setSummarizeLoading(true);
+    setSummarizeError(false);
+
+    try {
+      const res = await fetch("/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: item.link }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.json();
+      setAiSummary(typeof text === "string" ? text : String(text));
+    } catch (err) {
+      console.error(err);
+      setSummarizeError(true);
+    } finally {
+      setSummarizeLoading(false);
+    }
+  }, [aiSummary, summarizeLoading, item.link]);
+
+  const handlePopoverOpenChange = (open: boolean) => {
+    setPopoverOpen(open);
+    if (open) fetchSummary();
+  };
+
+  const summarizeControl = canSummarize ? (
+    <Popover open={popoverOpen} onOpenChange={handlePopoverOpenChange}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Summarize article"
+          className={[
+            "absolute top-2.5 right-2 z-10 flex items-center justify-center",
+            "w-7 h-7 rounded-md border transition-[color,background,border-color,box-shadow] duration-200",
+            popoverOpen
+              ? "text-[#22c55e] bg-[rgba(34,197,94,0.15)] border-[rgba(34,197,94,0.45)] shadow-[0_0_10px_rgba(34,197,94,0.2)]"
+              : "text-[#8a93a6] bg-[#161b27] border-[#1f2533] hover:text-[#22c55e] hover:border-[rgba(34,197,94,0.4)] hover:bg-[rgba(34,197,94,0.08)]",
+            summarizeLoading ? "cursor-wait opacity-80" : "cursor-pointer",
+          ].join(" ")}
+        >
+          {summarizeLoading ? (
+            <span className="w-3.5 h-3.5 border-2 border-transparent border-t-current rounded-full animate-spin" />
+          ) : (
+            <SummarizeIcon className="w-3.5 h-3.5" />
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="left"
+        align="start"
+        sideOffset={8}
+        collisionPadding={12}
+        className={[
+          "w-[min(92vw,32rem)] sm:w-[32rem] max-w-[32rem]",
+          "max-h-[min(75vh,480px)] p-0 gap-0 overflow-hidden",
+          "bg-[#161b27] text-[#e6e9ef] border-[#1f2533]",
+          "shadow-[0_16px_48px_rgba(0,0,0,0.55)] ring-1 ring-[#2a3245]",
+        ].join(" ")}
+      >
+        <PopoverHeader className="shrink-0 gap-1 px-4 pt-4 pb-3 border-b border-[#1a1f2b]">
+          <PopoverTitle className="flex items-center gap-2 text-[11px] font-bold tracking-[1.2px] uppercase text-[#22c55e]">
+            <SummarizeIcon className="w-3.5 h-3.5" />
+            AI Summary
+          </PopoverTitle>
+          <p className="text-[11px] text-[#8a93a6] font-normal leading-snug line-clamp-2 m-0">
+            {item.title}
+          </p>
+        </PopoverHeader>
+        <div className="overflow-y-auto px-4 py-3.5 min-h-[120px] max-h-[min(60vh,380px)] [scrollbar-color:#2a3245_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-[#232a3a] [&::-webkit-scrollbar-thumb]:rounded">
+          {summarizeLoading ? (
+            <p className="text-[13px] text-[#8a93a6] m-0 leading-relaxed">
+              Reading article and summarizing…
+            </p>
+          ) : summarizeError ? (
+            <p className="text-[13px] text-[#ef4444] m-0 leading-relaxed">
+              Could not summarize this article. Try closing and opening again.
+            </p>
+          ) : aiSummary ? (
+            <p className="text-[13px] text-[#c8cdd8] m-0 leading-[1.65] whitespace-pre-wrap">
+              {aiSummary}
+            </p>
+          ) : (
+            <p className="text-[13px] text-[#8a93a6] m-0 leading-relaxed">
+              Preparing summary…
+            </p>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  ) : null;
 
   return (
-    <a
-      className="flex items-start gap-2.5 py-2.5 px-3 border-b border-[#1a1f2b] last:border-b-0 cursor-pointer no-underline text-inherit transition-colors duration-150 hover:bg-white/2"
-      href={item.link}
-      target="_blank"
-      rel="noopener noreferrer"
-    >
+    <article className="relative border-b border-[#1a1f2b] last:border-b-0 transition-colors duration-150 hover:bg-white/2">
+      {summarizeControl}
+
+      <a
+        className={[
+          "flex items-start gap-2.5 py-2.5 pl-3 no-underline text-inherit",
+          canSummarize ? "pr-11" : "pr-3",
+        ].join(" ")}
+        href={item.link}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
       {mediaUrl ? (
         <div className="shrink-0 w-[76px] h-[52px] rounded overflow-hidden bg-[#161b27] border border-[#1a1f2b]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -443,16 +593,17 @@ function NewsItem({ item }: { item: FeedItem }) {
         <div className="text-[12.5px] font-medium text-[#e6e9ef] leading-[1.45] mb-1 line-clamp-3">
           {item.title}
         </div>
-        {summary ? (
+        {rssSummary ? (
           <div className="text-[11.5px] text-[#8a93a6] leading-normal mb-1.5 line-clamp-2">
-            {summary}
+            {rssSummary}
           </div>
         ) : null}
         <div className="text-[10px] text-[#5b6273] tracking-[0.3px]">
           {timeAgo(item.published)}
         </div>
       </div>
-    </a>
+      </a>
+    </article>
   );
 }
 
@@ -493,6 +644,388 @@ function CategoryCard({
   );
 }
 
+/* ---------- Videos frame (tabbed YouTube player) ---------- */
+
+const NO_VIDEO_TRANSCRIPT = "No transcript found";
+
+function groupVideosBySource(
+  videos: VideoItem[] | null
+): Map<string, VideoItem[]> | null {
+  if (!videos) return null;
+
+  const map = new Map<string, VideoItem[]>();
+
+  for (const v of videos) {
+    const src = v.source?.trim() || "Unknown";
+    const list = map.get(src);
+    if (list) list.push(v);
+    else map.set(src, [v]);
+  }
+
+  for (const list of map.values()) {
+    list.sort(
+      (a, b) =>
+        new Date(b.published ?? 0).getTime() -
+        new Date(a.published ?? 0).getTime()
+    );
+  }
+
+  return map;
+}
+
+function VideosFrame({
+  videos,
+  error,
+}: {
+  videos: VideoItem[] | null;
+  error: boolean;
+}) {
+  const bySource = useMemo(() => groupVideosBySource(videos), [videos]);
+  const sources = useMemo(
+    () =>
+      bySource
+        ? Array.from(bySource.keys()).sort((a, b) => a.localeCompare(b))
+        : [],
+    [bySource]
+  );
+
+  const [activeSource, setActiveSource] = useState("");
+  const [activeVideoIdx, setActiveVideoIdx] = useState(0);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [summarizeLoading, setSummarizeLoading] = useState(false);
+  const [summarizeError, setSummarizeError] = useState(false);
+  const [noTranscript, setNoTranscript] = useState(false);
+
+  useEffect(() => {
+    if (!sources.length) {
+      setActiveSource("");
+      setActiveVideoIdx(0);
+      return;
+    }
+    setActiveSource((prev) =>
+      prev && sources.includes(prev) ? prev : sources[0]
+    );
+    setActiveVideoIdx(0);
+  }, [sources]);
+
+  const sourceVideos =
+    activeSource && bySource ? bySource.get(activeSource) ?? [] : [];
+  const safeVideoIdx =
+    sourceVideos.length > 0
+      ? Math.min(activeVideoIdx, sourceVideos.length - 1)
+      : 0;
+  const active = sourceVideos[safeVideoIdx] ?? null;
+  const count = videos?.length ?? 0;
+
+  useEffect(() => {
+    setPopoverOpen(false);
+    setAiSummary(null);
+    setSummarizeLoading(false);
+    setSummarizeError(false);
+    setNoTranscript(false);
+  }, [active?.id]);
+
+  const fetchVideoSummary = useCallback(async () => {
+    if (!active?.id || aiSummary || summarizeLoading || noTranscript) return;
+
+    setSummarizeLoading(true);
+    setSummarizeError(false);
+
+    try {
+      const res = await fetch("/videos/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: active.id }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const result = typeof data === "string" ? data : String(data);
+      if (result.trim() === NO_VIDEO_TRANSCRIPT) {
+        setNoTranscript(true);
+        return;
+      }
+      setAiSummary(result);
+    } catch (err) {
+      console.error(err);
+      setSummarizeError(true);
+    } finally {
+      setSummarizeLoading(false);
+    }
+  }, [active?.id, aiSummary, summarizeLoading, noTranscript]);
+
+  const handleSummarizeOpenChange = (open: boolean) => {
+    setPopoverOpen(open);
+    if (open) fetchVideoSummary();
+  };
+
+  const switchSource = (source: string) => {
+    setActiveSource(source);
+    setActiveVideoIdx(0);
+  };
+
+  return (
+    <section
+      className={[
+        "relative flex flex-col col-span-1 sm:col-span-2",
+        "h-[420px] max-[640px]:h-[380px] overflow-hidden rounded-md",
+        "bg-[#11151f] border border-[#1f2533] transition-colors duration-200 hover:border-[#2a3245]",
+        "before:content-[''] before:absolute before:top-0 before:left-0 before:right-0",
+        "before:h-0.5 before:bg-[#ef4444] before:opacity-85",
+      ].join(" ")}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 py-3 px-3 pb-2.5 border-b border-[#1a1f2b]">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <svg
+            className="w-3.5 h-3.5 shrink-0 text-[#ef4444]"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path
+              d="M21.6 7.2a2.5 2.5 0 0 0-1.76-1.77C18.26 5 12 5 12 5s-6.26 0-7.84.43A2.5 2.5 0 0 0 2.4 7.2 26.2 26.2 0 0 0 2 12a26.2 26.2 0 0 0 .4 4.8 2.5 2.5 0 0 0 1.76 1.77C5.74 19 12 19 12 19s6.26 0 7.84-.43a2.5 2.5 0 0 0 1.76-1.77A26.2 26.2 0 0 0 22 12a26.2 26.2 0 0 0-.4-4.8z"
+              fill="currentColor"
+            />
+            <path d="M10 15.5v-7l6 3.5-6 3.5z" fill="#11151f" />
+          </svg>
+          <div className="min-w-0 text-xs font-bold tracking-[1.4px] uppercase text-[#e6e9ef] overflow-hidden text-ellipsis whitespace-nowrap">
+            Videos
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="inline-flex items-center gap-1 text-[9px] font-bold tracking-[1px] py-0.5 px-1.5 rounded-[3px] bg-[rgba(239,68,68,0.15)] text-[#ef4444] border border-[rgba(239,68,68,0.35)] before:content-[''] before:w-[5px] before:h-[5px] before:rounded-full before:bg-[#ef4444] before:shadow-[0_0_6px_#ef4444] before:animate-pulse">
+            LIVE
+          </span>
+          <span className="text-[10px] font-semibold text-[#8a93a6] py-0.5 px-[7px] rounded-[10px] bg-[#161b27] border border-[#1f2533] min-w-[22px] text-center">
+            {videos === null ? "\u2026" : count}
+          </span>
+        </div>
+      </div>
+
+      {/* Source tabs */}
+      <div
+        role="tablist"
+        aria-label="Video sources"
+        className="flex gap-1 px-2 py-1.5 border-b border-[#1a1f2b] shrink-0"
+      >
+        {videos === null ? (
+          <span className="text-[10px] text-[#5b6273] py-1.5 px-2.5 tracking-[0.6px] uppercase">
+            Loading sources&hellip;
+          </span>
+        ) : sources.length === 0 ? (
+          <span className="text-[10px] text-[#5b6273] py-1.5 px-2.5 tracking-[0.6px] uppercase">
+            {error ? "Failed to load videos." : "No video sources available."}
+          </span>
+        ) : (
+          sources.map((source) => {
+            const isActive = source === activeSource;
+            const sourceCount = bySource?.get(source)?.length ?? 0;
+            return (
+              <button
+                key={source}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={`videos-panel-${source.replace(/\s+/g, "-")}`}
+                onClick={() => switchSource(source)}
+                className={[
+                  "inline-flex items-center gap-2 py-1.5 px-3 rounded-md cursor-pointer",
+                  "text-[10.5px] font-bold tracking-[0.8px] uppercase",
+                  "border transition-[color,background,border-color,box-shadow] duration-180",
+                  isActive
+                    ? "text-[#ef4444] bg-[rgba(239,68,68,0.10)] border-[rgba(239,68,68,0.40)] shadow-[0_0_12px_rgba(239,68,68,0.25)_inset]"
+                    : "bg-transparent border-transparent text-[#8a93a6] hover:text-[#e6e9ef] hover:bg-white/4",
+                ].join(" ")}
+              >
+                <span className="truncate max-[640px]:max-w-[88px]">{source}</span>
+                <span className="text-[9px] font-semibold text-[#8a93a6] py-0.5 px-1.5 rounded-[8px] bg-[#161b27] border border-[#1f2533] min-w-[18px] text-center">
+                  {sourceCount}
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
+
+      {/* Player + sidebar */}
+      <div
+        id={
+          activeSource
+            ? `videos-panel-${activeSource.replace(/\s+/g, "-")}`
+            : "videos-panel"
+        }
+        role="tabpanel"
+        className="flex flex-1 min-h-0"
+      >
+        <div className="flex-1 min-w-0 bg-black relative overflow-hidden">
+          {active ? (
+            <>
+              <iframe
+                key={active.id}
+                src={`https://www.youtube.com/embed/${active.id}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1`}
+                title={active.title}
+                allow="autoplay; accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+                className="absolute inset-0 w-full h-full border-0"
+              />
+
+              <Popover open={popoverOpen} onOpenChange={handleSummarizeOpenChange}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Summarize video"
+                    className={[
+                      "absolute top-2.5 right-2.5 z-20 flex items-center justify-center",
+                      "w-7 h-7 rounded-md border transition-[color,background,border-color,box-shadow] duration-200",
+                      popoverOpen
+                        ? "text-[#ef4444] bg-[rgba(239,68,68,0.15)] border-[rgba(239,68,68,0.45)] shadow-[0_0_10px_rgba(239,68,68,0.2)]"
+                        : "text-[#e6e9ef] bg-[rgba(10,13,20,0.75)] border-[#1f2533] hover:text-[#ef4444] hover:border-[rgba(239,68,68,0.4)] hover:bg-[rgba(239,68,68,0.08)]",
+                      summarizeLoading
+                        ? "cursor-wait opacity-80"
+                        : "cursor-pointer",
+                    ].join(" ")}
+                  >
+                    {summarizeLoading ? (
+                      <span className="w-3.5 h-3.5 border-2 border-transparent border-t-current rounded-full animate-spin" />
+                    ) : (
+                      <SummarizeIcon className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  side="left"
+                  align="start"
+                  sideOffset={8}
+                  collisionPadding={12}
+                  className={[
+                    "w-[min(92vw,32rem)] sm:w-lg max-w-lg",
+                    "max-h-[min(75vh,480px)] p-0 gap-0 overflow-hidden",
+                    "bg-[#161b27] text-[#e6e9ef] border-[#1f2533]",
+                    "shadow-[0_16px_48px_rgba(0,0,0,0.55)] ring-1 ring-[#2a3245]",
+                  ].join(" ")}
+                >
+                  <PopoverHeader className="shrink-0 gap-1 px-4 pt-4 pb-3 border-b border-[#1a1f2b]">
+                    <PopoverTitle className="flex items-center gap-2 text-[11px] font-bold tracking-[1.2px] uppercase text-[#ef4444]">
+                      <SummarizeIcon className="w-3.5 h-3.5" />
+                      Video Summary
+                    </PopoverTitle>
+                    <p className="text-[11px] text-[#8a93a6] font-normal leading-snug line-clamp-2 m-0">
+                      {active.title}
+                    </p>
+                  </PopoverHeader>
+                  <div className="overflow-y-auto px-4 py-3.5 min-h-[120px] max-h-[min(60vh,380px)] [scrollbar-color:#2a3245_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-[#232a3a] [&::-webkit-scrollbar-thumb]:rounded">
+                    {summarizeLoading ? (
+                      <p className="text-[13px] text-[#8a93a6] m-0 leading-relaxed">
+                        Fetching transcript and summarizing&hellip;
+                      </p>
+                    ) : noTranscript ? (
+                      <p className="text-[13px] text-[#f59e0b] m-0 leading-relaxed">
+                        No transcript found for this video. Summaries need
+                        captions or subtitles on YouTube.
+                      </p>
+                    ) : summarizeError ? (
+                      <p className="text-[13px] text-[#ef4444] m-0 leading-relaxed">
+                        Could not summarize this video. Try closing and opening
+                        again.
+                      </p>
+                    ) : aiSummary ? (
+                      <p className="text-[13px] text-[#c8cdd8] m-0 leading-[1.65] whitespace-pre-wrap">
+                        {aiSummary}
+                      </p>
+                    ) : (
+                      <p className="text-[13px] text-[#8a93a6] m-0 leading-relaxed">
+                        Preparing summary&hellip;
+                      </p>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
+
+              <div className="absolute left-0 right-0 bottom-0 pointer-events-none px-3 py-2 bg-[linear-gradient(180deg,transparent,rgba(10,13,20,0.85))]">
+                <div className="text-[9px] tracking-[1px] uppercase text-[#8a93a6] font-bold mb-0.5">
+                  {timeAgo(active.published) || "Recent"}
+                </div>
+                <div className="text-[11.5px] text-[#e6e9ef] font-medium leading-snug line-clamp-2">
+                  {active.title}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center text-[#5b6273] text-xs tracking-[1px] uppercase">
+              {videos === null
+                ? "Loading\u2026"
+                : error
+                ? "Could not load videos."
+                : "No videos to play."}
+            </div>
+          )}
+        </div>
+
+        <aside
+          aria-label={`${activeSource || "Source"} videos`}
+          className={[
+            "w-[172px] max-[640px]:w-[128px] shrink-0 flex flex-col",
+            "border-l border-[#1a1f2b] bg-[#0f131c]",
+            "overflow-y-auto [scrollbar-color:#2a3245_transparent]",
+            "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent",
+            "[&::-webkit-scrollbar-thumb]:bg-[#232a3a] [&::-webkit-scrollbar-thumb]:rounded-[3px]",
+          ].join(" ")}
+        >
+          {sourceVideos.length === 0 ? (
+            <div className="py-6 px-2.5 text-center text-[#5b6273] text-[10px] leading-snug">
+              {videos === null ? "Loading\u2026" : "No videos in this source."}
+            </div>
+          ) : (
+            sourceVideos.map((v, i) => {
+              const isSelected = i === safeVideoIdx;
+              return (
+                <button
+                  key={v.id || `${v.link}-${i}`}
+                  type="button"
+                  title={v.title}
+                  onClick={() => setActiveVideoIdx(i)}
+                  className={[
+                    "w-full text-left p-2 border-b border-[#1a1f2b] last:border-b-0",
+                    "transition-colors duration-150 cursor-pointer",
+                    isSelected
+                      ? "bg-[rgba(239,68,68,0.10)] border-l-2 border-l-[#ef4444]"
+                      : "hover:bg-white/3 border-l-2 border-l-transparent",
+                  ].join(" ")}
+                >
+                  <div className="relative w-full aspect-video rounded overflow-hidden bg-[#161b27] border border-[#1a1f2b] mb-1.5">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`https://i.ytimg.com/vi/${v.id}/mqdefault.jpg`}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      className="w-full h-full object-cover block"
+                    />
+                    {isSelected ? (
+                      <span className="absolute inset-0 ring-1 ring-[#ef4444] ring-inset pointer-events-none" />
+                    ) : null}
+                  </div>
+                  <div
+                    className={[
+                      "text-[10px] font-medium leading-snug line-clamp-2 mb-0.5",
+                      isSelected ? "text-[#ef4444]" : "text-[#e6e9ef]",
+                    ].join(" ")}
+                  >
+                    {v.title}
+                  </div>
+                  <div className="text-[9px] text-[#5b6273] tracking-[0.3px]">
+                    {timeAgo(v.published)}
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
 /* =========================================================
  * Main page
  * ========================================================= */
@@ -501,6 +1034,10 @@ export default function VisionDashboard() {
   /* ----- Feed state ----- */
   const [feeds, setFeeds] = useState<FeedItem[] | null>(null);
   const [feedsError, setFeedsError] = useState(false);
+
+  /* ----- Videos state ----- */
+  const [videos, setVideos] = useState<VideoItem[] | null>(null);
+  const [videosError, setVideosError] = useState(false);
 
   /* ----- Hazard state ----- */
   const [activeTab, setActiveTab] = useState<HazardTab>("news");
@@ -1130,6 +1667,28 @@ export default function VisionDashboard() {
     loadFeeds();
   }, [loadFeeds]);
 
+  // Videos come from a separate YouTube RSS-backed endpoint. The
+  // backend currently exposes it as POST with no body, so we mirror
+  // that here. Fetched once on mount and again on manual refresh.
+  const loadVideos = useCallback(async () => {
+    setVideos(null);
+    setVideosError(false);
+    try {
+      const res = await fetch("/videos", { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setVideos(Array.isArray(data) ? (data as VideoItem[]) : []);
+    } catch (err) {
+      console.error(err);
+      setVideosError(true);
+      setVideos([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadVideos();
+  }, [loadVideos]);
+
   /* ----- News tab: render markers whenever feeds/tab/map change ----- */
 
   useEffect(() => {
@@ -1180,12 +1739,13 @@ export default function VisionDashboard() {
     try {
       await Promise.all([
         loadFeeds(),
+        loadVideos(),
         loadHazardTab(activeTabRef.current, true),
       ]);
     } finally {
       setRefreshing(false);
     }
-  }, [loadFeeds, loadHazardTab]);
+  }, [loadFeeds, loadVideos, loadHazardTab]);
 
   /* ----- Derived render data ----- */
 
@@ -1477,8 +2037,13 @@ export default function VisionDashboard() {
             </div>
           </section>
 
-          {/* ===== Dashboard grid ===== */}
+          {/* ===== Dashboard grid =====
+              The videos frame occupies the slot of the first two
+              news cards (col-span-2 on >= sm). News categories
+              flow around it. */}
           <div className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-3.5">
+            <VideosFrame videos={videos} error={videosError} />
+
             {grouped === null ? (
               <div className="col-span-full text-center text-[#8a93a6] py-[60px] text-sm">
                 {"Loading feeds\u2026"}

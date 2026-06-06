@@ -1,7 +1,7 @@
 import asyncio
 import feedparser # type: ignore
 import time
-from rss_urls import RSS_URLS
+from news_urls import NEWS_URLS
 import httpx
 from models import Feeds, feed
 from datetime import date, datetime, timedelta
@@ -12,60 +12,68 @@ nlp = spacy.load("en_core_web_sm")
 
 all_feeds = []
 
-async def fetch_feeds(rss_urls, client):
+all_titles = set()
+
+async def fetch_feeds(news_urls, client):
 
     local_feeds = []
 
-    print(f"Fetching feeds for {rss_urls['category']}")
+    print(f"Fetching feeds for {news_urls['category']}")
 
-    source = rss_urls["source"]
-    url = rss_urls["url"]
+    source = news_urls["source"]
+    url = news_urls["url"]
 
     response = await client.get(url)
     parsed_feed = feedparser.parse(response.text)
 
     for entry in parsed_feed.entries:
 
+        title = entry.get("title", "")
+
+        if title in all_titles:
+            continue
+
+        all_titles.add(title)
+
         if not entry.get("published_parsed"):
             continue
 
         published_date = datetime(*entry.published_parsed[:6]).date()
 
-        if published_date == date.today() or published_date == date.today() - timedelta(days=2):
-            continue
+        if published_date == date.today() or published_date == date.today() - timedelta(days=1):
 
-        doc = nlp(entry.get("title", ""))
+            doc = nlp(entry.get("title", ""))
 
-        found_countries = []
+            found_countries = []
 
-        lat = None
-        lon = None
+            lat = None
+            lon = None
 
-        for ent in doc.ents:
-            if ent.label_ == "GPE":
+            for ent in doc.ents:
+                if ent.label_ == "GPE":
 
-                country_name = ent.text
+                    country_name = ent.text
 
-                if country_name in Countries:
+                    if country_name in Countries:
 
-                    found_countries.append(country_name)
+                        found_countries.append(country_name)
 
-                    lat = Countries[country_name]["latitude"]
-                    lon = Countries[country_name]["longitude"]
+                        lat = Countries[country_name]["latitude"]
+                        lon = Countries[country_name]["longitude"]
 
-        response_feed = feed(
-            source=source,
-            title=entry.get("title", ""),
-            summary=entry.get("summary", ""),
-            link=entry.get("link", ""),
-            published=entry.get("published", ""),
-            category=rss_urls["category"],
-            country=found_countries,
-            latitude=lat,
-            longitude=lon
-        )
+            response_feed = feed(
+                source=source,
+                title=entry.get("title", ""),
+                summary=entry.get("summary", ""),
+                link=entry.get("link", ""),
+                published=entry.get("published", ""),
+                category=news_urls["category"],
+                country=found_countries,
+                latitude=lat,
+                longitude=lon
+            )
 
-        local_feeds.append(response_feed)
+            local_feeds.append(response_feed)
 
     return local_feeds
 
@@ -80,10 +88,18 @@ async def main():
 
     tasks = []
 
+    headers = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/136.0 Safari/537.36"
+        )
+    }
+
     
-    async with httpx.AsyncClient() as client:
-        for rss_urls in RSS_URLS:
-            task = asyncio.create_task(fetch_feeds(rss_urls, client))
+    async with httpx.AsyncClient(headers=headers) as client:
+        for news_url in NEWS_URLS:
+            task = asyncio.create_task(fetch_feeds(news_url, client))
             tasks.append(task)
 
         results =await asyncio.gather(*tasks)

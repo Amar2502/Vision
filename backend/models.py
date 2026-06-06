@@ -12,6 +12,14 @@ class feed(BaseModel):
     latitude: Optional[float]
     longitude: Optional[float]
 
+class video(BaseModel):
+    id: str
+    link: str
+    title: str
+    published: str
+    summary: str
+    source: str
+
 class Feeds(BaseModel):
     feeds: List[feed]
 

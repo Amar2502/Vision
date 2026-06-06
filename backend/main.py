@@ -1,18 +1,22 @@
 from fastapi import FastAPI, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
 import httpx
 import asyncio
 from datetime import date, timedelta
 import time
+import trafilatura # type: ignore
+import ollama
 
-from fetch_feeds import main
+from fetch_feeds import main    
+from videos_urls import VIDEOS_URLS
+import feedparser # type: ignore
+
 from typing import List
 
-from models import earthquakeEvent, wildfireEvent, flightEvent
+from models import earthquakeEvent, wildfireEvent, flightEvent, video
 
 from opensky_api import OpenSkyApi, TokenManager # type: ignore
+
+from youtube_transcript_api import YouTubeTranscriptApi # type: ignore
 
 app = FastAPI()
 
@@ -52,7 +56,7 @@ async def get_earthquakes():
 
     for feature in data["features"]:
 
-        if feature["properties"]["mag"] >= 2.5:
+        if feature["properties"]["mag"] and feature["properties"]["mag"] >= 2.5:
             response_feed = earthquakeEvent(
                 magnitude=feature["properties"]["mag"],
                 place=feature["properties"]["place"],
@@ -151,3 +155,94 @@ async def get_flights():
 
     return flights
 
+@app.post("/summarize")
+async def summarize(request: Request):
+
+    data = await request.json()
+
+    url = data.get("url", "")
+
+    downloaded = trafilatura.fetch_url(url)
+    text = trafilatura.extract(downloaded)
+
+    response = ollama.chat(
+        model="granite4.1:8b",
+        messages=[
+            {
+                'role': 'system',
+                'content': 'You are a news summarization assistant; you will be given cleaned article text extracted using Trafilatura and your task is to summarize it like a professional news reporter delivering a brief news bulletin—clear, factual, and neutral; use only the provided text and do not add, assume, or infer any information; if details are missing, state they are not specified in the article; present the output in a concise news style with a short headline followed by a tight, reporter-style summary of key facts (who, what, when, where, why, how), focusing on the most important developments, outcomes, and figures; keep the tone objective, formal, and broadcast-ready, avoiding opinions, repetition, and any external knowledge.'
+            },
+            {
+                'role': 'user',
+                'content': f"Summarize the following news:\n\n{text}"
+            }
+        ]
+    )
+
+    return response['message']['content']
+
+@app.post("/videos", response_model=List[video])
+async def get_videos():
+
+    videos = []
+
+    for feed in VIDEOS_URLS:
+        response = feedparser.parse(feed["url"])
+
+        for entry in response.entries:
+            videos.append(
+                video(
+                    id=entry.get("yt_videoid"),
+                    link=entry.get("link"),
+                    title=entry.get("title"),
+                    published=entry.get("published"),
+                    summary=entry.get("summary"),
+                    source=feed["source"]
+                )
+            )
+
+    videos.sort(key=lambda x: x.published, reverse=True)
+
+    return videos
+
+@app.post("/videos/summarize")
+async def summarize_video(request: Request):
+
+    data = await request.json()
+
+    video_id = data.get("id", "")
+
+    if not video_id:
+        return "No transcript found"
+
+    ytt_api = YouTubeTranscriptApi()
+
+    try:
+        fetched_transcript = await asyncio.to_thread(ytt_api.fetch, video_id)
+    except Exception:
+        return "No transcript found"
+
+    if not fetched_transcript or len(fetched_transcript) == 0:
+        return "No transcript found"
+
+    text = " ".join(snippet.text for snippet in fetched_transcript).strip()
+
+    if not text:
+        return "No transcript found"
+
+    response = ollama.chat(
+        model="granite4.1:8b",
+        messages=[
+            {
+                'role': 'system',
+                'content': 'You are a news summarization assistant; you will be given cleaned article text extracted using Trafilatura and your task is to summarize it like a professional news reporter delivering a brief news bulletin—clear, factual, and neutral; use only the provided text and do not add, assume, or infer any information; if details are missing, state they are not specified in the article; present the output in a concise news style with a short headline followed by a tight, reporter-style summary of key facts (who, what, when, where, why, how), focusing on the most important developments, outcomes, and figures; keep the tone objective, formal, and broadcast-ready, avoiding opinions, repetition, and any external knowledge.'
+            },
+            {
+                'role': 'user',
+
+                'content': f"Summarize the following news:\n\n{text}"
+            }
+        ]
+    )
+
+    return response['message']['content']
