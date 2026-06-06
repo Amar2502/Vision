@@ -33,6 +33,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+/backend/credentials.json
+
 # Virtual environments
 venv/
 env/
@@ -111,7 +113,8 @@ embeddings/
 *.pem
 *.key
 secrets/
-credentials/
+
+report.md
 
 # =========================
 # Misc
