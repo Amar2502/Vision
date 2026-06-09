@@ -12,7 +12,6 @@ import { MapLegend } from "@/components/vision/MapLegend";
 import {
   ACCENT_BAR,
   HAZARD_TABS,
-  INDIA_BOUNDS,
   PANEL_BG,
   PLANE_SVG_PATH,
   SPINNER_COLOR,
@@ -23,7 +22,6 @@ import {
 } from "@/lib/vision/constants";
 import {
   earthquakeColor,
-  earthquakeMarkerRadius,
   escapeHtml,
   formatAltitude,
   formatEarthquakeTime,
@@ -34,7 +32,6 @@ import {
   formatWildfireDate,
   stripTags,
 } from "@/lib/vision/helpers";
-import { loadLeaflet } from "@/lib/vision/leaflet";
 import type {
   EarthquakeEvent,
   FeedItem,
@@ -42,6 +39,250 @@ import type {
   HazardTab,
   WildfireEvent,
 } from "@/lib/vision/types";
+
+// Maps the official ISO country names emitted by the backend (countries.py)
+// onto the common names used in public/countries.geojson. Keys are normalized
+// (see normalizeCountryName), values are the GeoJSON "name" property.
+const COUNTRY_NAME_ALIASES: Record<string, string> = {
+  "russian federation": "Russia",
+  "korea republic of": "South Korea",
+  "korea democratic people s republic of": "North Korea",
+  "viet nam": "Vietnam",
+  "syrian arab republic": "Syria",
+  "iran islamic republic of": "Iran",
+  "lao people s democratic republic": "Laos",
+  "congo the democratic republic of the": "Democratic Republic of the Congo",
+  congo: "Republic of the Congo",
+  "tanzania united republic of": "Tanzania",
+  "venezuela bolivarian republic of": "Venezuela",
+  "moldova republic of": "Moldova",
+  "bolivia plurinational state of": "Bolivia",
+  "brunei darussalam": "Brunei",
+  "united states": "United States of America",
+  turkiye: "Turkey",
+  "cote d ivoire": "Ivory Coast",
+  "palestine state of": "Palestine",
+  bahamas: "The Bahamas",
+  "taiwan province of china": "Taiwan",
+  "micronesia federated states of": "Federated States of Micronesia",
+};
+
+function normalizeCountryName(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function lookupCountryFeature(
+  name: string,
+  featureMap: Map<string, any>
+): any {
+  const norm = normalizeCountryName(name);
+  if (featureMap.has(norm)) return featureMap.get(norm);
+
+  const alias = COUNTRY_NAME_ALIASES[norm];
+  if (alias) {
+    const aliasNorm = normalizeCountryName(alias);
+    if (featureMap.has(aliasNorm)) return featureMap.get(aliasNorm);
+  }
+
+  const beforeComma = normalizeCountryName(name.split(",")[0]);
+  if (beforeComma && featureMap.has(beforeComma)) {
+    return featureMap.get(beforeComma);
+  }
+
+  return undefined;
+}
+
+// ---- Shared popup markup (reused from the old Leaflet popups) ----
+const popupCardCls = "p-3 px-3.5";
+const popupHeadCls =
+  "flex items-center gap-2.5 pb-2 mb-2 border-b border-[#1a1f2b]";
+const popupBadgeBase =
+  "inline-flex items-center justify-center min-w-[42px] py-1 px-2 rounded-md text-[13px] font-extrabold tracking-[0.4px] text-[#0a0d14]";
+const popupTitleCls =
+  "text-[12.5px] font-semibold text-[#e6e9ef] leading-[1.35] flex-1 min-w-0";
+const popupRowsCls =
+  "grid grid-cols-[auto_1fr] gap-x-2.5 gap-y-[5px] text-[11.5px] m-0";
+const popupDtCls =
+  "text-[#5b6273] font-semibold uppercase text-[10px] tracking-[0.8px] self-center";
+const popupDdCls = "text-[#e6e9ef] m-0";
+
+function buildNewsHtml(group: {
+  country: string;
+  items: FeedItem[];
+}): string {
+  const count = group.items.length;
+  const newsBadge =
+    "inline-flex items-center justify-center min-w-[34px] py-1 px-2 rounded-md text-[12px] font-extrabold tracking-[0.6px] text-[#0a0d14] bg-[linear-gradient(135deg,#4ade80,#22c55e)]";
+
+  const itemsList = group.items
+    .slice(0, 12)
+    .map(
+      (f) => `
+      <a href="${escapeHtml(f.link)}" target="_blank" rel="noopener noreferrer"
+        class="block py-1.5 border-b border-[#1a1f2b] last:border-b-0 text-inherit no-underline transition-colors hover:text-[#22c55e]">
+        <div class="flex items-center gap-1.5 mb-0.5">
+          <span class="text-[9px] font-bold tracking-[0.6px] uppercase text-[#8a93a6]">${escapeHtml(
+            f.source || ""
+          )}</span>
+          ${
+            f.category
+              ? `<span class="text-[9px] text-[#5b6273] tracking-[0.4px]">\u00b7 ${escapeHtml(
+                  f.category
+                )}</span>`
+              : ""
+          }
+        </div>
+        <div class="text-[11.5px] font-medium leading-snug text-[#e6e9ef]">${escapeHtml(
+          f.title || ""
+        )}</div>
+      </a>`
+    )
+    .join("");
+
+  const moreText =
+    group.items.length > 12
+      ? `<div class="pt-1.5 text-[10px] text-[#5b6273] tracking-[0.4px]">+${
+          group.items.length - 12
+        } more</div>`
+      : "";
+
+  return `
+  <div class="${popupCardCls}">
+    <div class="${popupHeadCls}">
+      <span class="${newsBadge}">${escapeHtml(String(count))}</span>
+      <div class="${popupTitleCls}">${escapeHtml(group.country)}</div>
+    </div>
+    <div class="m-0">
+      ${itemsList}
+      ${moreText}
+    </div>
+  </div>`;
+}
+
+function buildEarthquakeHtml(eq: EarthquakeEvent): string {
+  const mag = eq.magnitude ?? 0;
+  const color = earthquakeColor(mag);
+  const felt = eq.felt != null ? formatNumber(eq.felt) : "\u2014";
+  const cdi = eq.cdi != null ? eq.cdi : "\u2014";
+  const depth =
+    eq.coordinates && eq.coordinates[2] != null
+      ? `${Number(eq.coordinates[2]).toFixed(1)} km`
+      : "\u2014";
+
+  return `
+  <div class="${popupCardCls}">
+    <div class="${popupHeadCls}">
+      <span class="${popupBadgeBase}" style="background:${color};">M ${mag.toFixed(
+        1
+      )}</span>
+      <div class="${popupTitleCls}">${escapeHtml(
+        eq.place || "Unknown location"
+      )}</div>
+    </div>
+    <dl class="${popupRowsCls}">
+      <dt class="${popupDtCls}">Depth</dt><dd class="${popupDdCls}">${escapeHtml(
+        depth
+      )}</dd>
+      <dt class="${popupDtCls}">Felt</dt><dd class="${popupDdCls}">${escapeHtml(
+        felt
+      )}</dd>
+      <dt class="${popupDtCls}">CDI</dt><dd class="${popupDdCls}">${escapeHtml(
+        cdi
+      )}</dd>
+      <dt class="${popupDtCls}">Time</dt><dd class="${popupDdCls}">${escapeHtml(
+        formatEarthquakeTime(eq.time)
+      )}</dd>
+    </dl>
+  </div>`;
+}
+
+function buildWildfireHtml(wf: WildfireEvent): string {
+  const sizeStr =
+    wf.magnitudeValue != null
+      ? `${formatNumber(wf.magnitudeValue)} ${wf.magnitudeUnit || ""}`.trim()
+      : "\u2014";
+  const desc = wf.description ? stripTags(wf.description) : "";
+  const wfBadge =
+    "inline-flex items-center justify-center min-w-0 py-1 px-1.5 rounded-md text-[13px] font-extrabold tracking-[0.4px] text-[#1a0d04] bg-[linear-gradient(135deg,#fbbf24,#ef4444)]";
+
+  return `
+  <div class="${popupCardCls}">
+    <div class="${popupHeadCls}">
+      <span class="${wfBadge}" aria-hidden="true">\uD83D\uDD25</span>
+      <div class="${popupTitleCls}">${escapeHtml(wf.title || "Wildfire")}</div>
+    </div>
+    <dl class="${popupRowsCls}">
+      <dt class="${popupDtCls}">Size</dt><dd class="${popupDdCls}">${escapeHtml(
+        sizeStr
+      )}</dd>
+      <dt class="${popupDtCls}">Source</dt><dd class="${popupDdCls}">${escapeHtml(
+        wf.source || "\u2014"
+      )}</dd>
+      <dt class="${popupDtCls}">Updated</dt><dd class="${popupDdCls}">${escapeHtml(
+        formatWildfireDate(wf.date)
+      )}</dd>
+      ${
+        desc
+          ? `<dt class="${popupDtCls}">Details</dt><dd class="${popupDdCls}">${escapeHtml(
+              desc
+            )}</dd>`
+          : ""
+      }
+    </dl>
+  </div>`;
+}
+
+function buildFlightHtml(flight: FlightEvent): string {
+  const flBadge =
+    "inline-flex items-center justify-center min-w-0 py-1 px-2 rounded-md text-[11px] font-extrabold tracking-[0.8px] text-[#0a0d14] bg-[linear-gradient(135deg,#a78bfa,#8b5cf6)]";
+  const callsign = (flight.callsign || "").trim() || "Unknown";
+  const status = flight.on_ground ? "On ground" : "Airborne";
+  const vRate =
+    flight.vertical_rate != null
+      ? `${flight.vertical_rate > 0 ? "+" : ""}${flight.vertical_rate.toFixed(
+          1
+        )} m/s`
+      : "\u2014";
+
+  return `
+  <div class="${popupCardCls}">
+    <div class="${popupHeadCls}">
+      <span class="${flBadge}">${escapeHtml(callsign)}</span>
+      <div class="${popupTitleCls}">${escapeHtml(
+        flight.origin_country || "Unknown origin"
+      )}</div>
+    </div>
+    <dl class="${popupRowsCls}">
+      <dt class="${popupDtCls}">Status</dt><dd class="${popupDdCls}">${escapeHtml(
+        status
+      )}</dd>
+      <dt class="${popupDtCls}">Altitude</dt><dd class="${popupDdCls}">${escapeHtml(
+        formatAltitude(flight.geo_altitude)
+      )}</dd>
+      <dt class="${popupDtCls}">Speed</dt><dd class="${popupDdCls}">${escapeHtml(
+        formatVelocity(flight.velocity)
+      )}</dd>
+      <dt class="${popupDtCls}">Heading</dt><dd class="${popupDdCls}">${escapeHtml(
+        formatHeading(flight.true_track)
+      )}</dd>
+      <dt class="${popupDtCls}">V/Rate</dt><dd class="${popupDdCls}">${escapeHtml(
+        vRate
+      )}</dd>
+      <dt class="${popupDtCls}">Seen</dt><dd class="${popupDdCls}">${escapeHtml(
+        formatFlightTime(flight.time_position)
+      )}</dd>
+    </dl>
+  </div>`;
+}
+
+function tooltip(html: string): string {
+  return `<div class="py-1.5 px-2.5 rounded-md bg-[#161b27] border border-[#1f2533] text-[#e6e9ef] text-[11px] font-semibold shadow-[0_8px_24px_rgba(0,0,0,0.5)] whitespace-nowrap">${html}</div>`;
+}
 
 function TabIcon({ tab }: { tab: HazardTab }) {
   if (tab === "news") {
@@ -135,12 +376,25 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
       TAB_META.news.overlayText
     );
     const [mapReady, setMapReady] = useState(false);
+    const [geoReady, setGeoReady] = useState(false);
 
-    const mapElRef = useRef<HTMLDivElement | null>(null);
-    const mapRef = useRef<any>(null);
-    const layerRef = useRef<any>(null);
+    // Globe render data (declarative, unlike Leaflet's imperative layers).
+    const [polygons, setPolygons] = useState<any[]>([]);
+    const [points, setPoints] = useState<any[]>([]);
+    const [selected, setSelected] = useState<string | null>(null);
+
+    // react-globe.gl is loaded client-side only (it needs WebGL/window).
+    const [GlobeComp, setGlobeComp] = useState<any>(null);
+    const [dims, setDims] = useState<{ width: number; height: number }>({
+      width: 0,
+      height: 0,
+    });
+
+    const wrapRef = useRef<HTMLDivElement | null>(null);
+    const globeRef = useRef<any>(null);
     const activeTabRef = useRef<HazardTab>(activeTab);
     const newsNeedsFitRef = useRef<boolean>(true);
+    const countryFeaturesRef = useRef<Map<string, any>>(new Map());
 
     const cacheRef = useRef<{
       news: FeedItem[];
@@ -160,412 +414,270 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
       activeTabRef.current = activeTab;
     }, [activeTab]);
 
-    const fitMapToBounds = useCallback((bounds: [number, number][]) => {
-      const map = mapRef.current;
-      if (!map) return;
-
-      if (bounds.length === 1) {
-        map.setView(bounds[0], 5);
-      } else if (bounds.length > 1) {
-        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 7 });
-      } else {
-        map.setView([20, 0], 2);
-      }
-      requestAnimationFrame(() => map.invalidateSize());
+    // Load the globe component on the client only.
+    useEffect(() => {
+      let on = true;
+      import("react-globe.gl").then((mod) => {
+        if (on) setGlobeComp(() => mod.default);
+      });
+      return () => {
+        on = false;
+      };
     }, []);
 
-    const popupCardCls = "p-3 px-3.5";
-    const popupHeadCls =
-      "flex items-center gap-2.5 pb-2 mb-2 border-b border-[#1a1f2b]";
-    const popupBadgeBase =
-      "inline-flex items-center justify-center min-w-[42px] py-1 px-2 rounded-md text-[13px] font-extrabold tracking-[0.4px] text-[#0a0d14]";
-    const popupTitleCls =
-      "text-[12.5px] font-semibold text-[#e6e9ef] leading-[1.35] flex-1 min-w-0";
-    const popupRowsCls =
-      "grid grid-cols-[auto_1fr] gap-x-2.5 gap-y-[5px] text-[11.5px] m-0";
-    const popupDtCls =
-      "text-[#5b6273] font-semibold uppercase text-[10px] tracking-[0.8px] self-center";
-    const popupDdCls = "text-[#e6e9ef] m-0";
+    // Keep the globe canvas sized to its container.
+    useEffect(() => {
+      const el = wrapRef.current;
+      if (!el) return;
+      const update = () =>
+        setDims({ width: el.clientWidth, height: el.clientHeight });
+      update();
+      const ro = new ResizeObserver(update);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }, [GlobeComp]);
 
-    const renderEarthquakes = useCallback(
-      (events: EarthquakeEvent[], opts: { refit?: boolean } = {}) => {
-        const { refit = true } = opts;
-        const L = window.L;
-        const layer = layerRef.current;
-        if (!L || !layer) return;
-
-        layer.clearLayers();
-        const bounds: [number, number][] = [];
-
-        events.forEach((eq) => {
-          const coords = eq.coordinates;
-          if (!coords || coords.length < 2) return;
-
-          const lat = coords[1];
-          const lng = coords[0];
-          const mag = eq.magnitude ?? 0;
-          const color = earthquakeColor(mag);
-
-          const marker = L.circleMarker([lat, lng], {
-            radius: earthquakeMarkerRadius(mag),
-            color,
-            fillColor: color,
-            fillOpacity: 0.85,
-            weight: 1,
-            opacity: 1,
-          });
-
-          const felt = eq.felt != null ? formatNumber(eq.felt) : "\u2014";
-          const cdi = eq.cdi != null ? eq.cdi : "\u2014";
-          const depth =
-            coords[2] != null
-              ? `${Number(coords[2]).toFixed(1)} km`
-              : "\u2014";
-
-          const html = `
-          <div class="${popupCardCls}">
-            <div class="${popupHeadCls}">
-              <span class="${popupBadgeBase}" style="background:${color};">M ${mag.toFixed(
-                1
-              )}</span>
-              <div class="${popupTitleCls}">${escapeHtml(
-                eq.place || "Unknown location"
-              )}</div>
-            </div>
-            <dl class="${popupRowsCls}">
-              <dt class="${popupDtCls}">Depth</dt><dd class="${popupDdCls}">${escapeHtml(
-                depth
-              )}</dd>
-              <dt class="${popupDtCls}">Felt</dt><dd class="${popupDdCls}">${escapeHtml(
-                felt
-              )}</dd>
-              <dt class="${popupDtCls}">CDI</dt><dd class="${popupDdCls}">${escapeHtml(
-                cdi
-              )}</dd>
-              <dt class="${popupDtCls}">Time</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatEarthquakeTime(eq.time)
-              )}</dd>
-            </dl>
-          </div>`;
-
-          marker.bindPopup(html, { maxWidth: 280 });
-          marker.addTo(layer);
-          bounds.push([lat, lng]);
-        });
-
-        if (refit) fitMapToBounds(bounds);
-      },
-      [fitMapToBounds]
-    );
-
-    const renderWildfires = useCallback(
-      (events: WildfireEvent[], opts: { refit?: boolean } = {}) => {
-        const { refit = true } = opts;
-        const L = window.L;
-        const layer = layerRef.current;
-        if (!L || !layer) return;
-
-        layer.clearLayers();
-        const bounds: [number, number][] = [];
-
-        events.forEach((wf) => {
-          const coords = wf.coordinates;
-          if (!coords || coords.length < 2) return;
-
-          const lat = coords[1];
-          const lng = coords[0];
-
-          const marker = L.circleMarker([lat, lng], {
-            radius: 3,
-            color: "#facc15",
-            fillColor: "#facc15",
-            fillOpacity: 0.9,
-            weight: 0.5,
-            opacity: 1,
-          });
-
-          const sizeStr =
-            wf.magnitudeValue != null
-              ? `${formatNumber(wf.magnitudeValue)} ${
-                  wf.magnitudeUnit || ""
-                }`.trim()
-              : "\u2014";
-          const desc = wf.description ? stripTags(wf.description) : "";
-
-          const wfBadge =
-            "inline-flex items-center justify-center min-w-0 py-1 px-1.5 rounded-md text-[13px] font-extrabold tracking-[0.4px] text-[#1a0d04] bg-[linear-gradient(135deg,#fbbf24,#ef4444)]";
-
-          const html = `
-          <div class="${popupCardCls}">
-            <div class="${popupHeadCls}">
-              <span class="${wfBadge}" aria-hidden="true">\uD83D\uDD25</span>
-              <div class="${popupTitleCls}">${escapeHtml(
-                wf.title || "Wildfire"
-              )}</div>
-            </div>
-            <dl class="${popupRowsCls}">
-              <dt class="${popupDtCls}">Size</dt><dd class="${popupDdCls}">${escapeHtml(
-                sizeStr
-              )}</dd>
-              <dt class="${popupDtCls}">Source</dt><dd class="${popupDdCls}">${escapeHtml(
-                wf.source || "\u2014"
-              )}</dd>
-              <dt class="${popupDtCls}">Updated</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatWildfireDate(wf.date)
-              )}</dd>
-              ${
-                desc
-                  ? `<dt class="${popupDtCls}">Details</dt><dd class="${popupDdCls}">${escapeHtml(
-                      desc
-                    )}</dd>`
-                  : ""
-              }
-            </dl>
-          </div>`;
-
-          marker.bindPopup(html, { maxWidth: 300 });
-          marker.addTo(layer);
-          bounds.push([lat, lng]);
-        });
-
-        if (refit) fitMapToBounds(bounds);
-      },
-      [fitMapToBounds]
-    );
-
-    const renderFlights = useCallback(
-      (events: FlightEvent[], opts: { refit?: boolean } = {}) => {
-        const { refit = true } = opts;
-        const L = window.L;
-        const layer = layerRef.current;
-        const map = mapRef.current;
-        if (!L || !layer) return;
-
-        layer.clearLayers();
-        const bounds: [number, number][] = [];
-
-        const flBadge =
-          "inline-flex items-center justify-center min-w-0 py-1 px-2 rounded-md text-[11px] font-extrabold tracking-[0.8px] text-[#0a0d14] bg-[linear-gradient(135deg,#a78bfa,#8b5cf6)]";
-
-        events.forEach((flight) => {
-          if (flight.latitude == null || flight.longitude == null) return;
-
-          const lat = flight.latitude;
-          const lng = flight.longitude;
-          const heading =
-            flight.true_track != null && !isNaN(flight.true_track)
-              ? flight.true_track
-              : 0;
-
-          const markerCls = flight.on_ground
-            ? "w-[18px] h-[18px] block pointer-events-auto will-change-transform transition-transform duration-200 ease-linear text-[#94a3b8] opacity-85"
-            : "w-[18px] h-[18px] block pointer-events-auto will-change-transform transition-transform duration-200 ease-linear text-[#a78bfa] [filter:drop-shadow(0_0_4px_rgba(167,139,250,0.55))]";
-
-          const iconHtml = `
-          <div class="${markerCls}" style="transform: rotate(${heading}deg);">
-            <svg viewBox="0 0 24 24" class="w-full h-full fill-current block">
-              <path d="${PLANE_SVG_PATH}"/>
-            </svg>
-          </div>`;
-
-          const icon = L.divIcon({
-            html: iconHtml,
-            className: "!bg-transparent !border-0",
-            iconSize: [18, 18],
-            iconAnchor: [9, 9],
-            popupAnchor: [0, -8],
-          });
-
-          const marker = L.marker([lat, lng], { icon, keyboard: false });
-
-          const callsign = (flight.callsign || "").trim() || "Unknown";
-          const status = flight.on_ground ? "On ground" : "Airborne";
-          const vRate =
-            flight.vertical_rate != null
-              ? `${flight.vertical_rate > 0 ? "+" : ""}${flight.vertical_rate.toFixed(
-                  1
-                )} m/s`
-              : "\u2014";
-
-          const html = `
-          <div class="${popupCardCls}">
-            <div class="${popupHeadCls}">
-              <span class="${flBadge}">${escapeHtml(callsign)}</span>
-              <div class="${popupTitleCls}">${escapeHtml(
-                flight.origin_country || "Unknown origin"
-              )}</div>
-            </div>
-            <dl class="${popupRowsCls}">
-              <dt class="${popupDtCls}">Status</dt><dd class="${popupDdCls}">${escapeHtml(
-                status
-              )}</dd>
-              <dt class="${popupDtCls}">Altitude</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatAltitude(flight.geo_altitude)
-              )}</dd>
-              <dt class="${popupDtCls}">Speed</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatVelocity(flight.velocity)
-              )}</dd>
-              <dt class="${popupDtCls}">Heading</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatHeading(flight.true_track)
-              )}</dd>
-              <dt class="${popupDtCls}">V/Rate</dt><dd class="${popupDdCls}">${escapeHtml(
-                vRate
-              )}</dd>
-              <dt class="${popupDtCls}">Seen</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatFlightTime(flight.time_position)
-              )}</dd>
-            </dl>
-          </div>`;
-
-          marker.bindPopup(html, { maxWidth: 280 });
-          marker.addTo(layer);
-          bounds.push([lat, lng]);
-        });
-
-        if (refit) {
-          if (bounds.length === 0 && map) {
-            map.fitBounds(INDIA_BOUNDS, { padding: [30, 30] });
-            requestAnimationFrame(() => map.invalidateSize());
-          } else {
-            fitMapToBounds(bounds);
+    // Load country boundaries once.
+    useEffect(() => {
+      let cancelled = false;
+      fetch("/countries.geojson")
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((geo) => {
+          if (cancelled) return;
+          const map = new Map<string, any>();
+          for (const feature of geo.features ?? []) {
+            const name = feature?.properties?.name;
+            if (name) map.set(normalizeCountryName(name), feature);
           }
-        }
-      },
-      [fitMapToBounds]
-    );
-
-    const renderNews = useCallback(
-      (items: FeedItem[], opts: { refit?: boolean } = {}) => {
-        const { refit = true } = opts;
-        const L = window.L;
-        const layer = layerRef.current;
-        if (!L || !layer) return;
-
-        layer.clearLayers();
-        const bounds: [number, number][] = [];
-
-        const groups = new Map<
-          string,
-          { lat: number; lng: number; country: string; items: FeedItem[] }
-        >();
-
-        for (const item of items) {
-          if (item.latitude == null || item.longitude == null) continue;
-          const key = `${item.latitude.toFixed(3)},${item.longitude.toFixed(3)}`;
-          const countryName =
-            Array.isArray(item.country) && item.country.length
-              ? item.country[item.country.length - 1]
-              : "Unknown";
-
-          const existing = groups.get(key);
-          if (existing) {
-            existing.items.push(item);
-          } else {
-            groups.set(key, {
-              lat: item.latitude,
-              lng: item.longitude,
-              country: countryName,
-              items: [item],
-            });
-          }
-        }
-
-        const newsBadge =
-          "inline-flex items-center justify-center min-w-[34px] py-1 px-2 rounded-md text-[12px] font-extrabold tracking-[0.6px] text-[#0a0d14] bg-[linear-gradient(135deg,#4ade80,#22c55e)]";
-
-        groups.forEach((group) => {
-          const count = group.items.length;
-          const radius = Math.min(14, 5 + Math.log2(count + 1) * 2.4);
-
-          const marker = L.circleMarker([group.lat, group.lng], {
-            radius,
-            color: "#22c55e",
-            fillColor: "#22c55e",
-            fillOpacity: 0.55,
-            weight: 1.5,
-            opacity: 1,
-          });
-
-          const itemsList = group.items
-            .slice(0, 6)
-            .map(
-              (f) => `
-              <a href="${escapeHtml(f.link)}" target="_blank" rel="noopener noreferrer"
-                class="block py-1.5 border-b border-[#1a1f2b] last:border-b-0 text-inherit no-underline transition-colors hover:text-[#22c55e]">
-                <div class="flex items-center gap-1.5 mb-0.5">
-                  <span class="text-[9px] font-bold tracking-[0.6px] uppercase text-[#8a93a6]">${escapeHtml(
-                    f.source || ""
-                  )}</span>
-                  ${
-                    f.category
-                      ? `<span class="text-[9px] text-[#5b6273] tracking-[0.4px]">\u00b7 ${escapeHtml(
-                          f.category
-                        )}</span>`
-                      : ""
-                  }
-                </div>
-                <div class="text-[11.5px] font-medium leading-snug text-[#e6e9ef]">${escapeHtml(
-                  f.title || ""
-                )}</div>
-              </a>`
-            )
-            .join("");
-
-          const moreText =
-            group.items.length > 6
-              ? `<div class="pt-1.5 text-[10px] text-[#5b6273] tracking-[0.4px]">+${
-                  group.items.length - 6
-                } more</div>`
-              : "";
-
-          const html = `
-          <div class="${popupCardCls}">
-            <div class="${popupHeadCls}">
-              <span class="${newsBadge}">${escapeHtml(String(count))}</span>
-              <div class="${popupTitleCls}">${escapeHtml(group.country)}</div>
-            </div>
-            <div class="m-0 max-h-[240px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#232a3a] [&::-webkit-scrollbar-thumb]:rounded-[2px]">
-              ${itemsList}
-              ${moreText}
-            </div>
-          </div>`;
-
-          marker.bindPopup(html, { maxWidth: 320 });
-          marker.addTo(layer);
-          bounds.push([group.lat, group.lng]);
+          countryFeaturesRef.current = map;
+          setGeoReady(true);
+        })
+        .catch((err) => {
+          console.error("Failed to load country boundaries", err);
         });
+      return () => {
+        cancelled = true;
+      };
+    }, []);
 
-        if (refit) fitMapToBounds(bounds);
-      },
-      [fitMapToBounds]
-    );
+    const flyTo = useCallback((coords: [number, number][]) => {
+      const globe = globeRef.current;
+      if (!globe) return;
+      if (!coords.length) {
+        globe.pointOfView({ lat: 20, lng: 20, altitude: 2.4 }, 800);
+        return;
+      }
+      let lat = 0;
+      let lng = 0;
+      for (const [la, lo] of coords) {
+        lat += la;
+        lng += lo;
+      }
+      globe.pointOfView(
+        {
+          lat: lat / coords.length,
+          lng: lng / coords.length,
+          altitude: coords.length > 1 ? 1.9 : 1.4,
+        },
+        800
+      );
+    }, []);
 
     const displayCached = useCallback(
       (tab: HazardTab, opts: { refit?: boolean } = {}) => {
+        const { refit = true } = opts;
         const meta = TAB_META[tab];
-        const list = cacheRef.current[tab] || [];
+        const coords: [number, number][] = [];
 
-        if (tab === "earthquake") {
-          renderEarthquakes(list as EarthquakeEvent[], opts);
+        if (tab === "news") {
+          const items = (cacheRef.current.news || []).filter(
+            (f) => f.latitude != null && f.longitude != null
+          );
+
+          const groups = new Map<
+            string,
+            { lat: number; lng: number; country: string; items: FeedItem[] }
+          >();
+          for (const item of items) {
+            const key = `${item.latitude!.toFixed(3)},${item.longitude!.toFixed(
+              3
+            )}`;
+            const countryName =
+              Array.isArray(item.country) && item.country.length
+                ? item.country[item.country.length - 1]
+                : "Unknown";
+            const existing = groups.get(key);
+            if (existing) existing.items.push(item);
+            else
+              groups.set(key, {
+                lat: item.latitude!,
+                lng: item.longitude!,
+                country: countryName,
+                items: [item],
+              });
+          }
+
+          const polys: any[] = [];
+          const pts: any[] = [];
+          groups.forEach((group) => {
+            coords.push([group.lat, group.lng]);
+            const count = group.items.length;
+            const feature = lookupCountryFeature(
+              group.country,
+              countryFeaturesRef.current
+            );
+            const intensity = Math.min(0.6, 0.16 + Math.log2(count + 1) * 0.08);
+            const detailHtml = buildNewsHtml(group);
+
+            if (feature) {
+              polys.push({
+                ...feature,
+                __country: group.country,
+                __count: count,
+                __capColor: `rgba(34,197,94,${intensity})`,
+                __altitude: 0.01 + Math.min(0.18, Math.log2(count + 1) * 0.02),
+                __label: tooltip(
+                  `${escapeHtml(group.country)} \u00b7 ${count} ${
+                    count === 1 ? "story" : "stories"
+                  }`
+                ),
+                __detailHtml: detailHtml,
+              });
+            } else {
+              // Fallback dot for countries with no boundary in the GeoJSON.
+              pts.push({
+                lat: group.lat,
+                lng: group.lng,
+                color: "#22c55e",
+                radius: Math.min(0.6, 0.25 + Math.log2(count + 1) * 0.08),
+                altitude: 0.01,
+                label: tooltip(
+                  `${escapeHtml(group.country)} \u00b7 ${count} ${
+                    count === 1 ? "story" : "stories"
+                  }`
+                ),
+                detailHtml,
+              });
+            }
+          });
+
+          setPolygons(polys);
+          setPoints(pts);
+          setHazardCount(String(items.length));
+          setHazardError(feedsError);
+          setHazardStatus(
+            feedsError
+              ? meta.fail
+              : items.length
+              ? `${items.length} ${
+                  items.length === 1 ? meta.eventLabel : meta.eventLabelPlural
+                } mapped`
+              : meta.empty
+          );
+        } else if (tab === "earthquake") {
+          const list = cacheRef.current.earthquake || [];
+          const pts = list
+            .filter((eq) => eq.coordinates && eq.coordinates.length >= 2)
+            .map((eq) => {
+              const lat = eq.coordinates[1];
+              const lng = eq.coordinates[0];
+              const mag = eq.magnitude ?? 0;
+              coords.push([lat, lng]);
+              return {
+                lat,
+                lng,
+                color: earthquakeColor(mag),
+                radius: Math.min(0.7, 0.2 + Math.max(0, mag - 2.5) * 0.12),
+                altitude: Math.min(0.5, 0.02 + Math.max(0, mag - 2.5) * 0.04),
+                label: tooltip(
+                  `M ${mag.toFixed(1)} \u00b7 ${escapeHtml(
+                    eq.place || "Unknown"
+                  )}`
+                ),
+                detailHtml: buildEarthquakeHtml(eq),
+              };
+            });
+          setPolygons([]);
+          setPoints(pts);
+          setHazardCount(String(list.length));
+          setHazardError(false);
+          setHazardStatus(
+            list.length
+              ? `${list.length} ${
+                  list.length === 1 ? meta.eventLabel : meta.eventLabelPlural
+                } loaded`
+              : meta.empty
+          );
         } else if (tab === "wildfire") {
-          renderWildfires(list as WildfireEvent[], opts);
-        } else if (tab === "flight") {
-          renderFlights(list as FlightEvent[], opts);
+          const list = cacheRef.current.wildfire || [];
+          const pts = list
+            .filter((wf) => wf.coordinates && wf.coordinates.length >= 2)
+            .map((wf) => {
+              const lat = wf.coordinates[1];
+              const lng = wf.coordinates[0];
+              coords.push([lat, lng]);
+              return {
+                lat,
+                lng,
+                color: "#facc15",
+                radius: 0.28,
+                altitude: 0.01,
+                label: tooltip(`\uD83D\uDD25 ${escapeHtml(wf.title || "Wildfire")}`),
+                detailHtml: buildWildfireHtml(wf),
+              };
+            });
+          setPolygons([]);
+          setPoints(pts);
+          setHazardCount(String(list.length));
+          setHazardError(false);
+          setHazardStatus(
+            list.length
+              ? `${list.length} ${
+                  list.length === 1 ? meta.eventLabel : meta.eventLabelPlural
+                } loaded`
+              : meta.empty
+          );
         } else {
-          renderNews(list as FeedItem[], opts);
+          const list = cacheRef.current.flight || [];
+          const pts = list
+            .filter((fl) => fl.latitude != null && fl.longitude != null)
+            .map((fl) => {
+              coords.push([fl.latitude, fl.longitude]);
+              return {
+                lat: fl.latitude,
+                lng: fl.longitude,
+                color: fl.on_ground ? "#94a3b8" : "#a78bfa",
+                radius: 0.22,
+                altitude: fl.on_ground
+                  ? 0.005
+                  : Math.min(0.25, 0.02 + (fl.geo_altitude ?? 0) / 60000),
+                label: tooltip(
+                  `${escapeHtml((fl.callsign || "").trim() || "Unknown")} \u00b7 ${
+                    fl.on_ground ? "On ground" : "Airborne"
+                  }`
+                ),
+                detailHtml: buildFlightHtml(fl),
+              };
+            });
+          setPolygons([]);
+          setPoints(pts);
+          setHazardCount(String(list.length));
+          setHazardError(false);
+          setHazardStatus(
+            list.length
+              ? `${list.length} ${
+                  list.length === 1 ? meta.eventLabel : meta.eventLabelPlural
+                } loaded`
+              : meta.empty
+          );
         }
 
-        setHazardCount(String(list.length));
-        setHazardError(false);
-        setHazardStatus(
-          list.length
-            ? `${list.length} ${
-                list.length === 1 ? meta.eventLabel : meta.eventLabelPlural
-              } loaded`
-            : meta.empty
-        );
+        if (refit && mapReady) flyTo(coords);
       },
-      [renderEarthquakes, renderWildfires, renderFlights, renderNews]
+      [feedsError, mapReady, flyTo]
     );
 
     const loadHazardTab = useCallback(
@@ -586,16 +698,13 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
           setHazardStatus(meta.loading);
           setHazardError(false);
           setHazardCount("\u2026");
-          layerRef.current?.clearLayers();
         }
 
         try {
           const res = await fetch(meta.endpoint);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
           const data = await res.json();
           const list = Array.isArray(data) ? data : [];
-
           cacheRef.current[tab] = list as never;
           loadedRef.current[tab] = true;
 
@@ -608,7 +717,8 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
             setHazardCount("\u2014");
             setHazardStatus(meta.fail);
             setHazardError(true);
-            layerRef.current?.clearLayers();
+            setPolygons([]);
+            setPoints([]);
           }
         } finally {
           if (activeTabRef.current === tab && !silent) setOverlayActive(false);
@@ -620,23 +730,20 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
     const switchTab = useCallback(
       (tab: HazardTab) => {
         if (tab === activeTabRef.current) return;
-
         activeTabRef.current = tab;
         setActiveTab(tab);
-        layerRef.current?.clearLayers();
+        setSelected(null);
+        setPolygons([]);
+        setPoints([]);
 
         if (tab === "news") {
           newsNeedsFitRef.current = true;
-          requestAnimationFrame(() => mapRef.current?.invalidateSize());
+          displayCached("news");
           return;
         }
 
-        if (loadedRef.current[tab]) {
-          displayCached(tab);
-          requestAnimationFrame(() => mapRef.current?.invalidateSize());
-        } else {
-          loadHazardTab(tab);
-        }
+        if (loadedRef.current[tab]) displayCached(tab);
+        else loadHazardTab(tab);
       },
       [displayCached, loadHazardTab]
     );
@@ -649,9 +756,9 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
       [loadHazardTab]
     );
 
+    // Live flight polling.
     useEffect(() => {
       if (activeTab !== "flight") return;
-
       loadHazardTab("flight", true, true);
       const interval = setInterval(
         () => loadHazardTab("flight", true, true),
@@ -660,53 +767,10 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
       return () => clearInterval(interval);
     }, [activeTab, loadHazardTab]);
 
-    useEffect(() => {
-      let cancelled = false;
-
-      loadLeaflet()
-        .then((L: any) => {
-          if (cancelled || !mapElRef.current || mapRef.current) return;
-
-          const map = L.map(mapElRef.current, {
-            center: [20, 0],
-            zoom: 2,
-            minZoom: 2,
-            worldCopyJump: true,
-            zoomControl: true,
-          });
-
-          L.tileLayer(
-            "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-            {
-              attribution:
-                '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-              subdomains: "abcd",
-              maxZoom: 19,
-            }
-          ).addTo(map);
-
-          mapRef.current = map;
-          layerRef.current = L.layerGroup().addTo(map);
-          setMapReady(true);
-
-          loadHazardTab(activeTabRef.current);
-        })
-        .catch((err) => {
-          console.error(err);
-          setHazardStatus("Failed to load map library.");
-          setHazardError(true);
-          setOverlayActive(false);
-        });
-
-      return () => {
-        cancelled = true;
-      };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
+    // Render/refresh news whenever feeds or boundaries change.
     useEffect(() => {
       if (feeds === null) {
-        if (activeTab === "news" && mapReady) {
+        if (activeTab === "news") {
           setOverlayText(TAB_META.news.overlayText);
           setOverlayActive(true);
           setHazardStatus(TAB_META.news.loading);
@@ -716,32 +780,18 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
         return;
       }
 
-      const withCoords = feeds.filter(
+      cacheRef.current.news = feeds.filter(
         (f) => f.latitude != null && f.longitude != null
       );
-      cacheRef.current.news = withCoords;
       loadedRef.current.news = true;
 
-      if (activeTab !== "news" || !mapReady) return;
+      if (activeTab !== "news") return;
 
       const refit = newsNeedsFitRef.current;
       newsNeedsFitRef.current = false;
-      renderNews(withCoords, { refit });
-
-      const meta = TAB_META.news;
-      setHazardCount(String(withCoords.length));
-      setHazardError(feedsError);
-      setHazardStatus(
-        feedsError
-          ? meta.fail
-          : withCoords.length
-          ? `${withCoords.length} ${
-              withCoords.length === 1 ? meta.eventLabel : meta.eventLabelPlural
-            } mapped`
-          : meta.empty
-      );
+      displayCached("news", { refit });
       setOverlayActive(false);
-    }, [feeds, activeTab, mapReady, renderNews, feedsError]);
+    }, [feeds, activeTab, geoReady, displayCached]);
 
     const meta = TAB_META[activeTab];
 
@@ -771,7 +821,7 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
                     type="button"
                     role="tab"
                     aria-selected={isActive}
-                    aria-controls="hazard-map"
+                    aria-controls="hazard-globe"
                     onClick={() => switchTab(tab)}
                     className={[
                       "inline-flex items-center gap-2 py-[7px] px-3.5 max-[640px]:px-2.5 rounded-md cursor-pointer",
@@ -802,30 +852,82 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
           </div>
         </div>
 
-        <div
-          className={[
-            "relative",
-            "[&_.leaflet-container]:bg-[#0f131c] [&_.leaflet-container]:font-[inherit]",
-            "[&_.leaflet-control-zoom_a]:bg-[#161b27]! [&_.leaflet-control-zoom_a]:text-[#e6e9ef]! [&_.leaflet-control-zoom_a]:border! [&_.leaflet-control-zoom_a]:border-[#1f2533]!",
-            "[&_.leaflet-control-zoom_a:hover]:bg-[#1b2230]!",
-            "[&_.leaflet-control-attribution]:bg-[rgba(15,19,28,0.8)]! [&_.leaflet-control-attribution]:text-[#5b6273]!",
-            "[&_.leaflet-control-attribution_a]:text-[#8a93a6]!",
-            "[&_.leaflet-popup-content-wrapper]:bg-[#161b27]! [&_.leaflet-popup-content-wrapper]:text-[#e6e9ef]!",
-            "[&_.leaflet-popup-content-wrapper]:border! [&_.leaflet-popup-content-wrapper]:border-[#1f2533]!",
-            "[&_.leaflet-popup-content-wrapper]:shadow-[0_12px_32px_rgba(0,0,0,0.6)]!",
-            "[&_.leaflet-popup-tip]:bg-[#161b27]! [&_.leaflet-popup-tip]:border! [&_.leaflet-popup-tip]:border-[#1f2533]!",
-            "[&_.leaflet-popup-content]:m-0! [&_.leaflet-popup-content]:text-xs! [&_.leaflet-popup-content]:leading-normal! [&_.leaflet-popup-content]:min-w-[200px]!",
-            "[&_.leaflet-popup-close-button]:text-[#5b6273]! [&_.leaflet-popup-close-button]:pt-1.5! [&_.leaflet-popup-close-button]:pr-2!",
-            "[&_.leaflet-popup-close-button:hover]:text-[#e6e9ef]!",
-          ].join(" ")}
-        >
+        <div className="relative">
           <div
-            ref={mapElRef}
-            id="hazard-map"
+            ref={wrapRef}
+            id="hazard-globe"
             role="tabpanel"
-            aria-label="Hazard map"
-            className="h-[420px] max-[640px]:h-[320px] w-full bg-[#0f131c] z-0"
-          />
+            aria-label="Hazard globe"
+            onMouseEnter={() => {
+              const controls = globeRef.current?.controls?.();
+              if (controls) controls.autoRotate = false;
+            }}
+            onMouseLeave={() => {
+              const controls = globeRef.current?.controls?.();
+              if (controls) controls.autoRotate = true;
+            }}
+            className="h-[420px] max-[640px]:h-[320px] w-full bg-[#0f131c] overflow-hidden z-0"
+          >
+            {GlobeComp && dims.width > 0 ? (
+              <GlobeComp
+                ref={globeRef}
+                width={dims.width}
+                height={dims.height}
+                backgroundColor="rgba(0,0,0,0)"
+                globeImageUrl="https://unpkg.com/three-globe/example/img/earth-night.jpg"
+                bumpImageUrl="https://unpkg.com/three-globe/example/img/earth-topology.png"
+                showAtmosphere
+                atmosphereColor="#38bdf8"
+                atmosphereAltitude={0.18}
+                onGlobeReady={() => {
+                  setMapReady(true);
+                  const controls = globeRef.current?.controls?.();
+                  if (controls) {
+                    controls.autoRotate = true;
+                    controls.autoRotateSpeed = 0.25;
+                    controls.enableDamping = true;
+                  }
+                  globeRef.current?.pointOfView({
+                    lat: 20,
+                    lng: 30,
+                    altitude: 2.4,
+                  });
+                }}
+                onGlobeClick={() => setSelected(null)}
+                polygonsData={polygons}
+                polygonAltitude={(d: any) => d.__altitude}
+                polygonCapColor={(d: any) => d.__capColor}
+                polygonSideColor={() => "rgba(34,197,94,0.12)"}
+                polygonStrokeColor={() => "#22c55e"}
+                polygonLabel={(d: any) => d.__label}
+                onPolygonClick={(d: any) => setSelected(d.__detailHtml)}
+                polygonsTransitionDuration={300}
+                pointsData={points}
+                pointLat={(d: any) => d.lat}
+                pointLng={(d: any) => d.lng}
+                pointColor={(d: any) => d.color}
+                pointAltitude={(d: any) => d.altitude}
+                pointRadius={(d: any) => d.radius}
+                pointLabel={(d: any) => d.label}
+                onPointClick={(d: any) => setSelected(d.detailHtml)}
+                pointsTransitionDuration={0}
+              />
+            ) : null}
+          </div>
+
+          {selected ? (
+            <div className="absolute top-3 right-3 z-600 w-[320px] max-w-[calc(100%-24px)] max-h-[calc(100%-24px)] overflow-y-auto rounded-lg border border-[#1f2533] bg-[#161b27] shadow-[0_12px_32px_rgba(0,0,0,0.6)] [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#232a3a] [&::-webkit-scrollbar-thumb]:rounded-[2px]">
+              <button
+                type="button"
+                onClick={() => setSelected(null)}
+                aria-label="Close details"
+                className="absolute top-1.5 right-2 z-10 text-[#5b6273] hover:text-[#e6e9ef] text-base leading-none cursor-pointer"
+              >
+                {"\u00d7"}
+              </button>
+              <div dangerouslySetInnerHTML={{ __html: selected }} />
+            </div>
+          ) : null}
 
           <div
             aria-hidden={!overlayActive}

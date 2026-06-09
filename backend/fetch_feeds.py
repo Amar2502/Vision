@@ -42,7 +42,7 @@ async def fetch_feeds(news_urls, client):
 
         if published_date == date.today() or published_date == date.today() - timedelta(days=1):
 
-            doc = nlp(entry.get("title", ""))
+            doc = nlp(entry.get("title", "") + " " + entry.get("summary", ""))
 
             found_countries = []
 

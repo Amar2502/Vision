@@ -33,7 +33,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-/backend/credentials.json
+credentials.json
+
+*.json
 
 # Virtual environments
 venv/
