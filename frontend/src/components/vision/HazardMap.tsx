@@ -43,6 +43,63 @@ import type {
   WildfireEvent,
 } from "@/lib/vision/types";
 
+// Maps the official ISO country names emitted by the backend (countries.py)
+// onto the common names used in public/countries.geojson. Keys are normalized
+// (see normalizeCountryName), values are the GeoJSON "name" property.
+const COUNTRY_NAME_ALIASES: Record<string, string> = {
+  "russian federation": "Russia",
+  "korea republic of": "South Korea",
+  "korea democratic people s republic of": "North Korea",
+  "viet nam": "Vietnam",
+  "syrian arab republic": "Syria",
+  "iran islamic republic of": "Iran",
+  "lao people s democratic republic": "Laos",
+  "congo the democratic republic of the": "Democratic Republic of the Congo",
+  congo: "Republic of the Congo",
+  "tanzania united republic of": "Tanzania",
+  "venezuela bolivarian republic of": "Venezuela",
+  "moldova republic of": "Moldova",
+  "bolivia plurinational state of": "Bolivia",
+  "brunei darussalam": "Brunei",
+  "united states": "United States of America",
+  turkiye: "Turkey",
+  "cote d ivoire": "Ivory Coast",
+  "palestine state of": "Palestine",
+  bahamas: "The Bahamas",
+  "taiwan province of china": "Taiwan",
+  "micronesia federated states of": "Federated States of Micronesia",
+};
+
+function normalizeCountryName(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function lookupCountryFeature(
+  name: string,
+  featureMap: Map<string, unknown>
+): unknown {
+  const norm = normalizeCountryName(name);
+  if (featureMap.has(norm)) return featureMap.get(norm);
+
+  const alias = COUNTRY_NAME_ALIASES[norm];
+  if (alias) {
+    const aliasNorm = normalizeCountryName(alias);
+    if (featureMap.has(aliasNorm)) return featureMap.get(aliasNorm);
+  }
+
+  const beforeComma = normalizeCountryName(name.split(",")[0]);
+  if (beforeComma && featureMap.has(beforeComma)) {
+    return featureMap.get(beforeComma);
+  }
+
+  return undefined;
+}
+
 function TabIcon({ tab }: { tab: HazardTab }) {
   if (tab === "news") {
     return (
@@ -135,12 +192,14 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
       TAB_META.news.overlayText
     );
     const [mapReady, setMapReady] = useState(false);
+    const [geoReady, setGeoReady] = useState(false);
 
     const mapElRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
     const layerRef = useRef<any>(null);
     const activeTabRef = useRef<HazardTab>(activeTab);
     const newsNeedsFitRef = useRef<boolean>(true);
+    const countryFeaturesRef = useRef<Map<string, unknown>>(new Map());
 
     const cacheRef = useRef<{
       news: FeedItem[];
@@ -159,6 +218,32 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
     useEffect(() => {
       activeTabRef.current = activeTab;
     }, [activeTab]);
+
+    // Load country boundaries once for the news choropleth.
+    useEffect(() => {
+      let cancelled = false;
+      fetch("/countries.geojson")
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((geo) => {
+          if (cancelled) return;
+          const map = new Map<string, unknown>();
+          for (const feature of geo.features ?? []) {
+            const name = feature?.properties?.name;
+            if (name) map.set(normalizeCountryName(name), feature);
+          }
+          countryFeaturesRef.current = map;
+          setGeoReady(true);
+        })
+        .catch((err) => {
+          console.error("Failed to load country boundaries", err);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, []);
 
     const fitMapToBounds = useCallback((bounds: [number, number][]) => {
       const map = mapRef.current;
@@ -444,27 +529,30 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
         layer.clearLayers();
         const bounds: [number, number][] = [];
 
+        // Group every story by its (last) matched country so each country gets
+        // a single choropleth polygon shaded by story volume.
         const groups = new Map<
           string,
-          { lat: number; lng: number; country: string; items: FeedItem[] }
+          { lat: number | null; lng: number | null; items: FeedItem[] }
         >();
 
         for (const item of items) {
-          if (item.latitude == null || item.longitude == null) continue;
-          const key = `${item.latitude.toFixed(3)},${item.longitude.toFixed(3)}`;
           const countryName =
             Array.isArray(item.country) && item.country.length
               ? item.country[item.country.length - 1]
               : "Unknown";
 
-          const existing = groups.get(key);
+          const existing = groups.get(countryName);
           if (existing) {
             existing.items.push(item);
+            if (existing.lat == null && item.latitude != null) {
+              existing.lat = item.latitude;
+              existing.lng = item.longitude ?? null;
+            }
           } else {
-            groups.set(key, {
-              lat: item.latitude,
-              lng: item.longitude,
-              country: countryName,
+            groups.set(countryName, {
+              lat: item.latitude ?? null,
+              lng: item.longitude ?? null,
               items: [item],
             });
           }
@@ -473,18 +561,8 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
         const newsBadge =
           "inline-flex items-center justify-center min-w-[34px] py-1 px-2 rounded-md text-[12px] font-extrabold tracking-[0.6px] text-[#0a0d14] bg-[linear-gradient(135deg,#4ade80,#22c55e)]";
 
-        groups.forEach((group) => {
+        groups.forEach((group, country) => {
           const count = group.items.length;
-          const radius = Math.min(14, 5 + Math.log2(count + 1) * 2.4);
-
-          const marker = L.circleMarker([group.lat, group.lng], {
-            radius,
-            color: "#22c55e",
-            fillColor: "#22c55e",
-            fillOpacity: 0.55,
-            weight: 1.5,
-            opacity: 1,
-          });
 
           const itemsList = group.items
             .slice(0, 6)
@@ -522,7 +600,7 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
           <div class="${popupCardCls}">
             <div class="${popupHeadCls}">
               <span class="${newsBadge}">${escapeHtml(String(count))}</span>
-              <div class="${popupTitleCls}">${escapeHtml(group.country)}</div>
+              <div class="${popupTitleCls}">${escapeHtml(country)}</div>
             </div>
             <div class="m-0 max-h-[240px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#232a3a] [&::-webkit-scrollbar-thumb]:rounded-[2px]">
               ${itemsList}
@@ -530,9 +608,59 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
             </div>
           </div>`;
 
-          marker.bindPopup(html, { maxWidth: 320 });
-          marker.addTo(layer);
-          bounds.push([group.lat, group.lng]);
+          const tooltip = `${escapeHtml(country)} \u00b7 ${count} ${
+            count === 1 ? "story" : "stories"
+          }`;
+
+          const feature = lookupCountryFeature(
+            country,
+            countryFeaturesRef.current
+          );
+
+          if (feature) {
+            const intensity = Math.min(0.62, 0.16 + Math.log2(count + 1) * 0.09);
+            const gj = L.geoJSON(feature as never, {
+              style: {
+                color: "#22c55e",
+                weight: 1,
+                opacity: 0.9,
+                fillColor: "#22c55e",
+                fillOpacity: intensity,
+              },
+            });
+
+            gj.on("mouseover", () =>
+              gj.setStyle({ weight: 2, fillOpacity: Math.min(0.8, intensity + 0.15) })
+            );
+            gj.on("mouseout", () =>
+              gj.setStyle({ weight: 1, fillOpacity: intensity })
+            );
+
+            gj.bindPopup(html, { maxWidth: 320 });
+            gj.bindTooltip(tooltip, { sticky: true, direction: "top" });
+            gj.addTo(layer);
+
+            const b = gj.getBounds();
+            if (b && b.isValid()) {
+              bounds.push([b.getSouth(), b.getWest()]);
+              bounds.push([b.getNorth(), b.getEast()]);
+            }
+          } else if (group.lat != null && group.lng != null) {
+            // Fallback dot for countries with no boundary in the GeoJSON.
+            const radius = Math.min(14, 5 + Math.log2(count + 1) * 2.4);
+            const marker = L.circleMarker([group.lat, group.lng], {
+              radius,
+              color: "#22c55e",
+              fillColor: "#22c55e",
+              fillOpacity: 0.55,
+              weight: 1.5,
+              opacity: 1,
+            });
+            marker.bindPopup(html, { maxWidth: 320 });
+            marker.bindTooltip(tooltip, { direction: "top" });
+            marker.addTo(layer);
+            bounds.push([group.lat, group.lng]);
+          }
         });
 
         if (refit) fitMapToBounds(bounds);
@@ -741,7 +869,7 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
           : meta.empty
       );
       setOverlayActive(false);
-    }, [feeds, activeTab, mapReady, renderNews, feedsError]);
+    }, [feeds, activeTab, mapReady, geoReady, renderNews, feedsError]);
 
     const meta = TAB_META[activeTab];
 

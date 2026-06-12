@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 import httpx
 import asyncio
 from datetime import date, timedelta
@@ -28,10 +29,10 @@ def home():
 
 @app.get("/feeds")
 async def get_feeds():
-    
-    feeds = await main()
-
-    return feeds
+    return StreamingResponse(
+        main(),
+        media_type="application/x-ndjson"
+    )
 
 @app.get("/earthquakes")
 async def get_earthquakes():

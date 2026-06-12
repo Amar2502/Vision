@@ -7,14 +7,11 @@ from models import Feeds, feed
 from datetime import date, datetime, timedelta
 import spacy
 from countries import Countries
+import json
 
 nlp = spacy.load("en_core_web_sm")  
 
-all_feeds = []
-
-all_titles = set()
-
-async def fetch_feeds(news_urls, client):
+async def fetch_feeds(news_urls, client, seen_titles):
 
     local_feeds = []
 
@@ -30,17 +27,17 @@ async def fetch_feeds(news_urls, client):
 
         title = entry.get("title", "")
 
-        if title in all_titles:
+        if title in seen_titles:
             continue
 
-        all_titles.add(title)
+        seen_titles.add(title)
 
         if not entry.get("published_parsed"):
             continue
 
         published_date = datetime(*entry.published_parsed[:6]).date()
 
-        if published_date == date.today() or published_date == date.today() - timedelta(days=1):
+        if published_date == date.today() or published_date == date.today() - timedelta(days=1) or published_date == date.today() - timedelta(days=2) or published_date == date.today() - timedelta(days=3):
 
             doc = nlp(entry.get("title", "") + " " + entry.get("summary", ""))
 
@@ -73,18 +70,19 @@ async def fetch_feeds(news_urls, client):
                 longitude=lon
             )
 
-            local_feeds.append(response_feed)
+            local_feeds.append(response_feed.model_dump())
 
-    return local_feeds
+    return {
+        "source": source,
+        "feeds": local_feeds
+    }
 
 
 async def main():
     
     start = time.time()
 
-    global all_feeds
-
-    all_feeds = []    
+    seen_titles = set()
 
     tasks = []
 
@@ -99,16 +97,13 @@ async def main():
     
     async with httpx.AsyncClient(headers=headers) as client:
         for news_url in NEWS_URLS:
-            task = asyncio.create_task(fetch_feeds(news_url, client))
+            task = asyncio.create_task(fetch_feeds(news_url, client, seen_titles))
             tasks.append(task)
 
-        results =await asyncio.gather(*tasks)
+        for task in asyncio.as_completed(tasks):
+            result = await task
 
-        for result in results:
-            all_feeds.extend(result)
-
-    final_feeds = Feeds(feeds=all_feeds)
-
-    print(f"Time taken for Feeds: {time.time() - start} seconds")
-
-    return final_feeds
+            yield json.dumps({
+                "source": result["source"],
+                "feeds": result["feeds"]
+            }) + "\n"

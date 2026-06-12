@@ -20,8 +20,41 @@ export default function VisionDashboard() {
     setFeedsError(false);
     try {
       const res = await fetch("/feeds");
-      const data = await res.json();
-      setFeeds(Array.isArray(data?.feeds) ? data.feeds : []);
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const ingest = (line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        const chunk = JSON.parse(trimmed) as {
+          source?: string;
+          feeds?: FeedItem[];
+        };
+        const incoming = Array.isArray(chunk.feeds) ? chunk.feeds : [];
+        if (incoming.length === 0) return;
+        setFeeds((prev) => [...(prev ?? []), ...incoming]);
+      };
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newlineIndex);
+          buffer = buffer.slice(newlineIndex + 1);
+          ingest(line);
+        }
+      }
+
+      buffer += decoder.decode();
+      ingest(buffer);
+
+      setFeeds((prev) => prev ?? []);
     } catch (err) {
       console.error(err);
       setFeedsError(true);
