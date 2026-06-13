@@ -9,10 +9,9 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { SummarizeIcon } from "@/components/vision/NewsItem";
+import { NO_VIDEO_TRANSCRIPT, summarizeVideo } from "@/lib/vision/api";
 import { timeAgo } from "@/lib/vision/helpers";
 import type { VideoItem } from "@/lib/vision/types";
-
-const NO_VIDEO_TRANSCRIPT = "No transcript found";
 
 function groupVideosBySource(
   videos: VideoItem[] | null
@@ -59,7 +58,7 @@ export function VideosFrame({ videos, error }: VideosFrameProps) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [summarizeLoading, setSummarizeLoading] = useState(false);
-  const [summarizeError, setSummarizeError] = useState(false);
+  const [summarizeError, setSummarizeError] = useState<string | null>(null);
   const [noTranscript, setNoTranscript] = useState(false);
 
   useEffect(() => {
@@ -87,7 +86,7 @@ export function VideosFrame({ videos, error }: VideosFrameProps) {
     setPopoverOpen(false);
     setAiSummary(null);
     setSummarizeLoading(false);
-    setSummarizeError(false);
+    setSummarizeError(null);
     setNoTranscript(false);
   }, [active?.id]);
 
@@ -95,17 +94,10 @@ export function VideosFrame({ videos, error }: VideosFrameProps) {
     if (!active?.id || aiSummary || summarizeLoading || noTranscript) return;
 
     setSummarizeLoading(true);
-    setSummarizeError(false);
+    setSummarizeError(null);
 
     try {
-      const res = await fetch("/videos/summarize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: active.id }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const result = typeof data === "string" ? data : String(data);
+      const result = await summarizeVideo(active.id);
       if (result.trim() === NO_VIDEO_TRANSCRIPT) {
         setNoTranscript(true);
         return;
@@ -113,7 +105,9 @@ export function VideosFrame({ videos, error }: VideosFrameProps) {
       setAiSummary(result);
     } catch (err) {
       console.error(err);
-      setSummarizeError(true);
+      setSummarizeError(
+        err instanceof Error ? err.message : "Could not summarize this video."
+      );
     } finally {
       setSummarizeLoading(false);
     }
@@ -220,7 +214,7 @@ export function VideosFrame({ videos, error }: VideosFrameProps) {
         className="flex flex-1 min-h-0"
       >
         <div className="flex-1 min-w-0 bg-black relative overflow-hidden">
-          {active ? (
+          {active?.id ? (
             <>
               <iframe
                 key={active.id}
@@ -287,8 +281,7 @@ export function VideosFrame({ videos, error }: VideosFrameProps) {
                       </p>
                     ) : summarizeError ? (
                       <p className="text-[13px] text-[#ef4444] m-0 leading-relaxed">
-                        Could not summarize this video. Try closing and opening
-                        again.
+                        {summarizeError}
                       </p>
                     ) : aiSummary ? (
                       <p className="text-[13px] text-[#c8cdd8] m-0 leading-[1.65] whitespace-pre-wrap">
@@ -355,14 +348,16 @@ export function VideosFrame({ videos, error }: VideosFrameProps) {
                   ].join(" ")}
                 >
                   <div className="relative w-full aspect-video rounded overflow-hidden bg-[#161b27] border border-[#1a1f2b] mb-1.5">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`https://i.ytimg.com/vi/${v.id}/mqdefault.jpg`}
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                      className="w-full h-full object-cover block"
-                    />
+                    {v.id ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={`https://i.ytimg.com/vi/${v.id}/mqdefault.jpg`}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        className="w-full h-full object-cover block"
+                      />
+                    ) : null}
                     {isSelected ? (
                       <span className="absolute inset-0 ring-1 ring-[#ef4444] ring-inset pointer-events-none" />
                     ) : null}

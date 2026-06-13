@@ -1,11 +1,13 @@
 import { useMemo } from "react";
 import { CategoryCard } from "@/components/vision/CategoryCard";
 import { VideosFrame } from "@/components/vision/VideosFrame";
+import { compareFeedItems } from "@/lib/vision/helpers";
 import type { FeedItem, VideoItem } from "@/lib/vision/types";
 
 interface NewsGridProps {
   feeds: FeedItem[] | null;
   feedsError: boolean;
+  feedsLoading: boolean;
   videos: VideoItem[] | null;
   videosError: boolean;
 }
@@ -13,6 +15,7 @@ interface NewsGridProps {
 export function NewsGrid({
   feeds,
   feedsError,
+  feedsLoading,
   videos,
   videosError,
 }: NewsGridProps) {
@@ -23,21 +26,33 @@ export function NewsGrid({
       const key = f.category || "Uncategorized";
       (map[key] = map[key] || []).push(f);
     }
+
+    for (const items of Object.values(map)) {
+      items.sort(compareFeedItems);
+    }
+
     return map;
   }, [feeds]);
 
-  const categories = useMemo(
-    () => (grouped ? Object.keys(grouped).sort() : []),
-    [grouped]
-  );
+  const categories = useMemo(() => {
+    if (!grouped) return [];
+    return Object.keys(grouped).sort((a, b) => {
+      const maxA = Math.max(...grouped[a].map((item) => item.importance ?? 0));
+      const maxB = Math.max(...grouped[b].map((item) => item.importance ?? 0));
+      return maxB - maxA || a.localeCompare(b);
+    });
+  }, [grouped]);
 
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-3.5">
       <VideosFrame videos={videos} error={videosError} />
 
-      {grouped === null ? (
+      {feedsLoading && feeds === null ? (
         <div className="col-span-full text-center text-[#8a93a6] py-[60px] text-sm">
           {"Loading feeds\u2026"}
+          <div className="text-[11px] text-[#5b6273] mt-2">
+            Stories stream in as each source finishes processing.
+          </div>
         </div>
       ) : feedsError ? (
         <div className="col-span-full text-center text-[#8a93a6] py-[60px] text-sm">
@@ -47,11 +62,11 @@ export function NewsGrid({
         <div className="col-span-full text-center text-[#8a93a6] py-[60px] text-sm">
           No feeds available.
         </div>
-      ) : (
+      ) : grouped ? (
         categories.map((cat) => (
           <CategoryCard key={cat} category={cat} items={grouped[cat]} />
         ))
-      )}
+      ) : null}
     </div>
   );
 }

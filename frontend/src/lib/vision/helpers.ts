@@ -35,9 +35,32 @@ export function formatNumber(n?: number | null): string {
   return new Intl.NumberFormat().format(n);
 }
 
-export function getMediaUrl(item: FeedItem): string {
-  const u = item.media_url ?? item.media;
-  return typeof u === "string" ? u.trim() : "";
+export function importanceLabel(score?: number): string {
+  const n = score ?? 0;
+  if (n >= 5) return "Critical";
+  if (n >= 4) return "Major";
+  if (n >= 3) return "National";
+  if (n >= 2) return "Notable";
+  if (n >= 1) return "Minor";
+  return "Low";
+}
+
+export function importanceColor(score?: number): string {
+  const n = score ?? 0;
+  if (n >= 5) return "#ef4444";
+  if (n >= 4) return "#f97316";
+  if (n >= 3) return "#eab308";
+  if (n >= 2) return "#38bdf8";
+  return "#8a93a6";
+}
+
+export function compareFeedItems(a: FeedItem, b: FeedItem): number {
+  const importanceDiff = (b.importance ?? 0) - (a.importance ?? 0);
+  if (importanceDiff !== 0) return importanceDiff;
+
+  const aTime = new Date(a.published ?? 0).getTime();
+  const bTime = new Date(b.published ?? 0).getTime();
+  return bTime - aTime;
 }
 
 export function earthquakeColor(mag: number): string {
@@ -56,33 +79,6 @@ export function formatEarthquakeTime(ms: number): string {
   return isNaN(d.getTime()) ? "Unknown time" : d.toLocaleString();
 }
 
-export function formatWildfireDate(dateStr?: string): string {
-  if (!dateStr) return "Unknown time";
-  const d = new Date(dateStr);
-  return isNaN(d.getTime()) ? dateStr : d.toLocaleString();
-}
-
-export function formatAltitude(meters?: number | null): string {
-  if (meters == null || isNaN(meters)) return "\u2014";
-  return `${formatNumber(Math.round(meters))} m`;
-}
-
-export function formatVelocity(mps?: number | null): string {
-  if (mps == null || isNaN(mps)) return "\u2014";
-  return `${formatNumber(Math.round(mps * 3.6))} km/h`;
-}
-
-export function formatHeading(deg?: number | null): string {
-  if (deg == null || isNaN(deg)) return "\u2014";
-  return `${Math.round(deg)}\u00b0`;
-}
-
-export function formatFlightTime(sec?: number | null): string {
-  if (sec == null) return "\u2014";
-  const d = new Date(sec * 1000);
-  return isNaN(d.getTime()) ? "\u2014" : d.toLocaleTimeString();
-}
-
 export function escapeHtml(text: unknown): string {
   if (text === null || text === undefined) return "";
   return String(text)
@@ -93,6 +89,6 @@ export function escapeHtml(text: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
-export function isSummarizableSource(source?: string): boolean {
-  return (source?.trim().toLowerCase() ?? "") !== "reuters";
+export function isSummarizableSource(link?: string): boolean {
+  return Boolean(link?.trim());
 }

@@ -4,11 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Header } from "@/components/vision/Header";
 import { HazardMap, type HazardMapHandle } from "@/components/vision/HazardMap";
 import { NewsGrid } from "@/components/vision/NewsGrid";
+import { fetchVideos, streamFeeds } from "@/lib/vision/api";
 import type { FeedItem, VideoItem } from "@/lib/vision/types";
 
 export default function VisionDashboard() {
   const [feeds, setFeeds] = useState<FeedItem[] | null>(null);
   const [feedsError, setFeedsError] = useState(false);
+  const [feedsLoading, setFeedsLoading] = useState(true);
   const [videos, setVideos] = useState<VideoItem[] | null>(null);
   const [videosError, setVideosError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -18,47 +20,19 @@ export default function VisionDashboard() {
   const loadFeeds = useCallback(async () => {
     setFeeds(null);
     setFeedsError(false);
+    setFeedsLoading(true);
+
     try {
-      const res = await fetch("/feeds");
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      const ingest = (line: string) => {
-        const trimmed = line.trim();
-        if (!trimmed) return;
-        const chunk = JSON.parse(trimmed) as {
-          source?: string;
-          feeds?: FeedItem[];
-        };
-        const incoming = Array.isArray(chunk.feeds) ? chunk.feeds : [];
-        if (incoming.length === 0) return;
+      await streamFeeds((incoming) => {
         setFeeds((prev) => [...(prev ?? []), ...incoming]);
-      };
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        let newlineIndex: number;
-        while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
-          const line = buffer.slice(0, newlineIndex);
-          buffer = buffer.slice(newlineIndex + 1);
-          ingest(line);
-        }
-      }
-
-      buffer += decoder.decode();
-      ingest(buffer);
-
+      });
       setFeeds((prev) => prev ?? []);
     } catch (err) {
       console.error(err);
       setFeedsError(true);
       setFeeds([]);
+    } finally {
+      setFeedsLoading(false);
     }
   }, []);
 
@@ -69,11 +43,9 @@ export default function VisionDashboard() {
   const loadVideos = useCallback(async () => {
     setVideos(null);
     setVideosError(false);
+
     try {
-      const res = await fetch("/videos", { method: "POST" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setVideos(Array.isArray(data) ? (data as VideoItem[]) : []);
+      setVideos(await fetchVideos());
     } catch (err) {
       console.error(err);
       setVideosError(true);
@@ -127,11 +99,13 @@ export default function VisionDashboard() {
             ref={hazardMapRef}
             feeds={feeds}
             feedsError={feedsError}
+            feedsLoading={feedsLoading}
           />
 
           <NewsGrid
             feeds={feeds}
             feedsError={feedsError}
+            feedsLoading={feedsLoading}
             videos={videos}
             videosError={videosError}
           />

@@ -8,8 +8,10 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { summarizeArticle } from "@/lib/vision/api";
 import {
-  getMediaUrl,
+  importanceColor,
+  importanceLabel,
   isRecent,
   isSummarizableSource,
   stripTags,
@@ -48,33 +50,29 @@ interface NewsItemProps {
 
 export function NewsItem({ item }: NewsItemProps) {
   const rssSummary = stripTags(item.summary);
-  const mediaUrl = getMediaUrl(item);
   const recent = isRecent(item.published);
-  const canSummarize = isSummarizableSource(item.source);
+  const canSummarize = isSummarizableSource(item.link);
+  const importance = item.importance ?? 0;
+  const showImportance = importance >= 3;
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [summarizeLoading, setSummarizeLoading] = useState(false);
-  const [summarizeError, setSummarizeError] = useState(false);
+  const [summarizeError, setSummarizeError] = useState<string | null>(null);
 
   const fetchSummary = useCallback(async () => {
     if (aiSummary || summarizeLoading) return;
 
     setSummarizeLoading(true);
-    setSummarizeError(false);
+    setSummarizeError(null);
 
     try {
-      const res = await fetch("/summarize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: item.link }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.json();
-      setAiSummary(typeof text === "string" ? text : String(text));
+      setAiSummary(await summarizeArticle(item.link));
     } catch (err) {
       console.error(err);
-      setSummarizeError(true);
+      setSummarizeError(
+        err instanceof Error ? err.message : "Could not summarize this article."
+      );
     } finally {
       setSummarizeLoading(false);
     }
@@ -135,7 +133,7 @@ export function NewsItem({ item }: NewsItemProps) {
             </p>
           ) : summarizeError ? (
             <p className="text-[13px] text-[#ef4444] m-0 leading-relaxed">
-              Could not summarize this article. Try closing and opening again.
+              {summarizeError}
             </p>
           ) : aiSummary ? (
             <p className="text-[13px] text-[#c8cdd8] m-0 leading-[1.65] whitespace-pre-wrap">
@@ -164,18 +162,6 @@ export function NewsItem({ item }: NewsItemProps) {
         target="_blank"
         rel="noopener noreferrer"
       >
-        {mediaUrl ? (
-          <div className="shrink-0 w-[76px] h-[52px] rounded overflow-hidden bg-[#161b27] border border-[#1a1f2b]">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={mediaUrl}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="w-full h-full object-cover block"
-            />
-          </div>
-        ) : null}
         <div className="flex-1 min-w-0">
           <div className="flex items-center flex-wrap gap-x-1.5 gap-y-1 mb-1.5">
             <span className="text-[10px] font-bold tracking-[0.8px] text-[#8a93a6] uppercase">
@@ -184,6 +170,18 @@ export function NewsItem({ item }: NewsItemProps) {
             {recent ? (
               <span className="text-[9px] font-bold tracking-[0.6px] py-0.5 px-1.5 rounded-sm uppercase bg-[rgba(34,197,94,0.18)] text-[#22c55e] border border-[rgba(34,197,94,0.4)]">
                 NEW
+              </span>
+            ) : null}
+            {showImportance ? (
+              <span
+                className="text-[9px] font-bold tracking-[0.6px] py-0.5 px-1.5 rounded-sm uppercase border"
+                style={{
+                  color: importanceColor(importance),
+                  borderColor: `${importanceColor(importance)}66`,
+                  background: `${importanceColor(importance)}22`,
+                }}
+              >
+                {importanceLabel(importance)}
               </span>
             ) : null}
           </div>

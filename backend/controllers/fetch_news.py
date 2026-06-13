@@ -1,17 +1,14 @@
 import asyncio
 import feedparser # type: ignore
 import time
-from news_urls import NEWS_URLS
+from ingestion_source.news import NEWS_URLS
 import httpx
-from models import Feeds, feed
+from models import feed
 from datetime import date, datetime, timedelta
-import spacy
-from countries import Countries
 import json
+from utils.get_countries import get_countries
 
-nlp = spacy.load("en_core_web_sm")  
-
-async def fetch_feeds(news_urls, client, seen_titles):
+async def fetch_single_news(news_urls, client, seen_titles, llm):
 
     local_feeds = []
 
@@ -37,26 +34,11 @@ async def fetch_feeds(news_urls, client, seen_titles):
 
         published_date = datetime(*entry.published_parsed[:6]).date()
 
-        if published_date == date.today() or published_date == date.today() - timedelta(days=1) or published_date == date.today() - timedelta(days=2) or published_date == date.today() - timedelta(days=3):
+        if published_date == date.today() or published_date == date.today() - timedelta(days=1):
 
-            doc = nlp(entry.get("title", "") + " " + entry.get("summary", ""))
-
-            found_countries = []
-
-            lat = None
-            lon = None
-
-            for ent in doc.ents:
-                if ent.label_ == "GPE":
-
-                    country_name = ent.text
-
-                    if country_name in Countries:
-
-                        found_countries.append(country_name)
-
-                        lat = Countries[country_name]["latitude"]
-                        lon = Countries[country_name]["longitude"]
+            result = await get_countries(title, entry.get("summary", ""), llm)
+            importance = result.importance
+            countries = result.countries
 
             response_feed = feed(
                 source=source,
@@ -65,9 +47,8 @@ async def fetch_feeds(news_urls, client, seen_titles):
                 link=entry.get("link", ""),
                 published=entry.get("published", ""),
                 category=news_urls["category"],
-                country=found_countries,
-                latitude=lat,
-                longitude=lon
+                country=countries,
+                importance=importance
             )
 
             local_feeds.append(response_feed.model_dump())
@@ -78,9 +59,7 @@ async def fetch_feeds(news_urls, client, seen_titles):
     }
 
 
-async def main():
-    
-    start = time.time()
+async def fetch_news(llm):
 
     seen_titles = set()
 
@@ -97,7 +76,7 @@ async def main():
     
     async with httpx.AsyncClient(headers=headers) as client:
         for news_url in NEWS_URLS:
-            task = asyncio.create_task(fetch_feeds(news_url, client, seen_titles))
+            task = asyncio.create_task(fetch_single_news(news_url, client, seen_titles, llm))
             tasks.append(task)
 
         for task in asyncio.as_completed(tasks):

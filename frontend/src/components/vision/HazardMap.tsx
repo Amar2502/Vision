@@ -1,47 +1,33 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import {
   forwardRef,
   useCallback,
   useEffect,
   useImperativeHandle,
-  useRef,
+  useMemo,
   useState,
 } from "react";
+import type {
+  GlobePoint,
+  GlobePolygon,
+} from "@/components/vision/GlobeView";
 import { MapLegend } from "@/components/vision/MapLegend";
-import {
-  ACCENT_BAR,
-  HAZARD_TABS,
-  INDIA_BOUNDS,
-  PANEL_BG,
-  PLANE_SVG_PATH,
-  SPINNER_COLOR,
-  STATUS_DOT,
-  TAB_ACTIVE,
-  TAB_LABEL,
-  TAB_META,
-} from "@/lib/vision/constants";
+import { fetchEarthquakes } from "@/lib/vision/api";
+import { MAP_SUBTITLE } from "@/lib/vision/constants";
 import {
   earthquakeColor,
-  earthquakeMarkerRadius,
   escapeHtml,
-  formatAltitude,
   formatEarthquakeTime,
-  formatFlightTime,
-  formatHeading,
   formatNumber,
-  formatVelocity,
-  formatWildfireDate,
-  stripTags,
 } from "@/lib/vision/helpers";
-import { loadLeaflet } from "@/lib/vision/leaflet";
-import type {
-  EarthquakeEvent,
-  FeedItem,
-  FlightEvent,
-  HazardTab,
-  WildfireEvent,
-} from "@/lib/vision/types";
+import type { EarthquakeEvent, FeedItem } from "@/lib/vision/types";
+
+// The globe relies on WebGL/`window`, so it must only load on the client.
+const GlobeView = dynamic(() => import("@/components/vision/GlobeView"), {
+  ssr: false,
+});
 
 // Maps the official ISO country names emitted by the backend (countries.py)
 // onto the common names used in public/countries.geojson. Keys are normalized
@@ -100,75 +86,55 @@ function lookupCountryFeature(
   return undefined;
 }
 
-function TabIcon({ tab }: { tab: HazardTab }) {
-  if (tab === "news") {
-    return (
-      <svg
-        className="w-3.5 h-3.5 shrink-0"
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-      >
-        <circle
-          cx="12"
-          cy="12"
-          r="9"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-        />
-        <path
-          d="M3 12 H21 M12 3 C15 6.5 15 17.5 12 21 M12 3 C9 6.5 9 17.5 12 21"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-        />
-      </svg>
-    );
-  }
-  if (tab === "earthquake") {
-    return (
-      <svg
-        className="w-3.5 h-3.5 shrink-0"
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-      >
-        <path
-          d="M2 12 H5 L7 6 L10 18 L13 4 L16 20 L19 10 L22 12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
-  if (tab === "wildfire") {
-    return (
-      <svg
-        className="w-3.5 h-3.5 shrink-0"
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-      >
-        <path
-          d="M12 3 C13 7 17 8 17 13 C17 16.5 14.7 19 12 19 C9.3 19 7 16.5 7 13 C7 11 8 10 9 9.5 C9 11 10 12 11 12 C10 9 12 7 12 3 Z"
-          fill="currentColor"
-          opacity="0.95"
-        />
-      </svg>
-    );
-  }
-  return (
-    <svg
-      className="w-3.5 h-3.5 shrink-0"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
-      <path d={PLANE_SVG_PATH} fill="currentColor" />
-    </svg>
-  );
+// Lightweight HTML tooltip shown on hover by globe.gl (rendered outside the
+// React tree, so styling is inline rather than Tailwind).
+const tipShell =
+  "font-family:Inter,system-ui,sans-serif;background:#161b27;color:#e6e9ef;border:1px solid #1f2533;border-radius:8px;padding:8px 10px;max-width:240px;box-shadow:0 12px 32px rgba(0,0,0,0.55)";
+
+function newsTooltip(country: string, items: FeedItem[]): string {
+  const heads = items
+    .slice(0, 3)
+    .map(
+      (f) =>
+        `<div style="font-size:11px;color:#cbd2e0;line-height:1.35;margin-top:3px">\u2022 ${escapeHtml(
+          f.title || ""
+        )}</div>`
+    )
+    .join("");
+  const more =
+    items.length > 3
+      ? `<div style="font-size:10px;color:#5b6273;margin-top:4px">+${
+          items.length - 3
+        } more \u00b7 click to open</div>`
+      : `<div style="font-size:10px;color:#5b6273;margin-top:4px">click to open</div>`;
+  return `<div style="${tipShell}">
+    <div style="font-size:12px;font-weight:700;color:#22c55e">${escapeHtml(
+      country
+    )} \u00b7 ${items.length} ${items.length === 1 ? "story" : "stories"}</div>
+    ${heads}${more}
+  </div>`;
 }
+
+function quakeTooltip(eq: EarthquakeEvent, color: string): string {
+  return `<div style="${tipShell}">
+    <div style="display:flex;align-items:center;gap:6px">
+      <span style="background:${color};color:#0a0d14;font-weight:800;font-size:12px;border-radius:5px;padding:1px 6px">M ${(
+        eq.magnitude ?? 0
+      ).toFixed(1)}</span>
+      <span style="font-size:11.5px;font-weight:600">${escapeHtml(
+        eq.place || "Unknown location"
+      )}</span>
+    </div>
+    <div style="font-size:10px;color:#5b6273;margin-top:4px">${escapeHtml(
+      formatEarthquakeTime(eq.time)
+    )}</div>
+  </div>`;
+}
+
+type Selection =
+  | { kind: "news"; country: string; items: FeedItem[] }
+  | { kind: "quake"; eq: EarthquakeEvent }
+  | null;
 
 export interface HazardMapHandle {
   refresh: () => Promise<void>;
@@ -177,47 +143,17 @@ export interface HazardMapHandle {
 interface HazardMapProps {
   feeds: FeedItem[] | null;
   feedsError: boolean;
+  feedsLoading: boolean;
 }
 
 export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
-  function HazardMap({ feeds, feedsError }, ref) {
-    const [activeTab, setActiveTab] = useState<HazardTab>("news");
-    const [hazardCount, setHazardCount] = useState<string>("\u2014");
-    const [hazardStatus, setHazardStatus] = useState<string>(
-      TAB_META.news.loading
-    );
-    const [hazardError, setHazardError] = useState(false);
-    const [overlayActive, setOverlayActive] = useState(true);
-    const [overlayText, setOverlayText] = useState<string>(
-      TAB_META.news.overlayText
-    );
-    const [mapReady, setMapReady] = useState(false);
-    const [geoReady, setGeoReady] = useState(false);
-
-    const mapElRef = useRef<HTMLDivElement | null>(null);
-    const mapRef = useRef<any>(null);
-    const layerRef = useRef<any>(null);
-    const activeTabRef = useRef<HazardTab>(activeTab);
-    const newsNeedsFitRef = useRef<boolean>(true);
-    const countryFeaturesRef = useRef<Map<string, unknown>>(new Map());
-
-    const cacheRef = useRef<{
-      news: FeedItem[];
-      earthquake: EarthquakeEvent[];
-      wildfire: WildfireEvent[];
-      flight: FlightEvent[];
-    }>({ news: [], earthquake: [], wildfire: [], flight: [] });
-
-    const loadedRef = useRef<Record<HazardTab, boolean>>({
-      news: false,
-      earthquake: false,
-      wildfire: false,
-      flight: false,
-    });
-
-    useEffect(() => {
-      activeTabRef.current = activeTab;
-    }, [activeTab]);
+  function HazardMap({ feeds, feedsError, feedsLoading }, ref) {
+    const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
+    const [quakeError, setQuakeError] = useState(false);
+    const [countryFeatures, setCountryFeatures] = useState<
+      Map<string, unknown>
+    >(() => new Map());
+    const [selection, setSelection] = useState<Selection>(null);
 
     // Load country boundaries once for the news choropleth.
     useEffect(() => {
@@ -234,8 +170,7 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
             const name = feature?.properties?.name;
             if (name) map.set(normalizeCountryName(name), feature);
           }
-          countryFeaturesRef.current = map;
-          setGeoReady(true);
+          setCountryFeatures(map);
         })
         .catch((err) => {
           console.error("Failed to load country boundaries", err);
@@ -245,679 +180,148 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
       };
     }, []);
 
-    const fitMapToBounds = useCallback((bounds: [number, number][]) => {
-      const map = mapRef.current;
-      if (!map) return;
-
-      if (bounds.length === 1) {
-        map.setView(bounds[0], 5);
-      } else if (bounds.length > 1) {
-        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 7 });
-      } else {
-        map.setView([20, 0], 2);
+    const loadEarthquakes = useCallback(async () => {
+      try {
+        setEarthquakes(await fetchEarthquakes());
+        setQuakeError(false);
+      } catch (err) {
+        console.error(err);
+        setEarthquakes([]);
+        setQuakeError(true);
       }
-      requestAnimationFrame(() => map.invalidateSize());
     }, []);
 
-    const popupCardCls = "p-3 px-3.5";
-    const popupHeadCls =
-      "flex items-center gap-2.5 pb-2 mb-2 border-b border-[#1a1f2b]";
-    const popupBadgeBase =
-      "inline-flex items-center justify-center min-w-[42px] py-1 px-2 rounded-md text-[13px] font-extrabold tracking-[0.4px] text-[#0a0d14]";
-    const popupTitleCls =
-      "text-[12.5px] font-semibold text-[#e6e9ef] leading-[1.35] flex-1 min-w-0";
-    const popupRowsCls =
-      "grid grid-cols-[auto_1fr] gap-x-2.5 gap-y-[5px] text-[11.5px] m-0";
-    const popupDtCls =
-      "text-[#5b6273] font-semibold uppercase text-[10px] tracking-[0.8px] self-center";
-    const popupDdCls = "text-[#e6e9ef] m-0";
-
-    const renderEarthquakes = useCallback(
-      (events: EarthquakeEvent[], opts: { refit?: boolean } = {}) => {
-        const { refit = true } = opts;
-        const L = window.L;
-        const layer = layerRef.current;
-        if (!L || !layer) return;
-
-        layer.clearLayers();
-        const bounds: [number, number][] = [];
-
-        events.forEach((eq) => {
-          const coords = eq.coordinates;
-          if (!coords || coords.length < 2) return;
-
-          const lat = coords[1];
-          const lng = coords[0];
-          const mag = eq.magnitude ?? 0;
-          const color = earthquakeColor(mag);
-
-          const marker = L.circleMarker([lat, lng], {
-            radius: earthquakeMarkerRadius(mag),
-            color,
-            fillColor: color,
-            fillOpacity: 0.85,
-            weight: 1,
-            opacity: 1,
-          });
-
-          const felt = eq.felt != null ? formatNumber(eq.felt) : "\u2014";
-          const cdi = eq.cdi != null ? eq.cdi : "\u2014";
-          const depth =
-            coords[2] != null
-              ? `${Number(coords[2]).toFixed(1)} km`
-              : "\u2014";
-
-          const html = `
-          <div class="${popupCardCls}">
-            <div class="${popupHeadCls}">
-              <span class="${popupBadgeBase}" style="background:${color};">M ${mag.toFixed(
-                1
-              )}</span>
-              <div class="${popupTitleCls}">${escapeHtml(
-                eq.place || "Unknown location"
-              )}</div>
-            </div>
-            <dl class="${popupRowsCls}">
-              <dt class="${popupDtCls}">Depth</dt><dd class="${popupDdCls}">${escapeHtml(
-                depth
-              )}</dd>
-              <dt class="${popupDtCls}">Felt</dt><dd class="${popupDdCls}">${escapeHtml(
-                felt
-              )}</dd>
-              <dt class="${popupDtCls}">CDI</dt><dd class="${popupDdCls}">${escapeHtml(
-                cdi
-              )}</dd>
-              <dt class="${popupDtCls}">Time</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatEarthquakeTime(eq.time)
-              )}</dd>
-            </dl>
-          </div>`;
-
-          marker.bindPopup(html, { maxWidth: 280 });
-          marker.addTo(layer);
-          bounds.push([lat, lng]);
-        });
-
-        if (refit) fitMapToBounds(bounds);
-      },
-      [fitMapToBounds]
-    );
-
-    const renderWildfires = useCallback(
-      (events: WildfireEvent[], opts: { refit?: boolean } = {}) => {
-        const { refit = true } = opts;
-        const L = window.L;
-        const layer = layerRef.current;
-        if (!L || !layer) return;
-
-        layer.clearLayers();
-        const bounds: [number, number][] = [];
-
-        events.forEach((wf) => {
-          const coords = wf.coordinates;
-          if (!coords || coords.length < 2) return;
-
-          const lat = coords[1];
-          const lng = coords[0];
-
-          const marker = L.circleMarker([lat, lng], {
-            radius: 3,
-            color: "#facc15",
-            fillColor: "#facc15",
-            fillOpacity: 0.9,
-            weight: 0.5,
-            opacity: 1,
-          });
-
-          const sizeStr =
-            wf.magnitudeValue != null
-              ? `${formatNumber(wf.magnitudeValue)} ${
-                  wf.magnitudeUnit || ""
-                }`.trim()
-              : "\u2014";
-          const desc = wf.description ? stripTags(wf.description) : "";
-
-          const wfBadge =
-            "inline-flex items-center justify-center min-w-0 py-1 px-1.5 rounded-md text-[13px] font-extrabold tracking-[0.4px] text-[#1a0d04] bg-[linear-gradient(135deg,#fbbf24,#ef4444)]";
-
-          const html = `
-          <div class="${popupCardCls}">
-            <div class="${popupHeadCls}">
-              <span class="${wfBadge}" aria-hidden="true">\uD83D\uDD25</span>
-              <div class="${popupTitleCls}">${escapeHtml(
-                wf.title || "Wildfire"
-              )}</div>
-            </div>
-            <dl class="${popupRowsCls}">
-              <dt class="${popupDtCls}">Size</dt><dd class="${popupDdCls}">${escapeHtml(
-                sizeStr
-              )}</dd>
-              <dt class="${popupDtCls}">Source</dt><dd class="${popupDdCls}">${escapeHtml(
-                wf.source || "\u2014"
-              )}</dd>
-              <dt class="${popupDtCls}">Updated</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatWildfireDate(wf.date)
-              )}</dd>
-              ${
-                desc
-                  ? `<dt class="${popupDtCls}">Details</dt><dd class="${popupDdCls}">${escapeHtml(
-                      desc
-                    )}</dd>`
-                  : ""
-              }
-            </dl>
-          </div>`;
-
-          marker.bindPopup(html, { maxWidth: 300 });
-          marker.addTo(layer);
-          bounds.push([lat, lng]);
-        });
-
-        if (refit) fitMapToBounds(bounds);
-      },
-      [fitMapToBounds]
-    );
-
-    const renderFlights = useCallback(
-      (events: FlightEvent[], opts: { refit?: boolean } = {}) => {
-        const { refit = true } = opts;
-        const L = window.L;
-        const layer = layerRef.current;
-        const map = mapRef.current;
-        if (!L || !layer) return;
-
-        layer.clearLayers();
-        const bounds: [number, number][] = [];
-
-        const flBadge =
-          "inline-flex items-center justify-center min-w-0 py-1 px-2 rounded-md text-[11px] font-extrabold tracking-[0.8px] text-[#0a0d14] bg-[linear-gradient(135deg,#a78bfa,#8b5cf6)]";
-
-        events.forEach((flight) => {
-          if (flight.latitude == null || flight.longitude == null) return;
-
-          const lat = flight.latitude;
-          const lng = flight.longitude;
-          const heading =
-            flight.true_track != null && !isNaN(flight.true_track)
-              ? flight.true_track
-              : 0;
-
-          const markerCls = flight.on_ground
-            ? "w-[18px] h-[18px] block pointer-events-auto will-change-transform transition-transform duration-200 ease-linear text-[#94a3b8] opacity-85"
-            : "w-[18px] h-[18px] block pointer-events-auto will-change-transform transition-transform duration-200 ease-linear text-[#a78bfa] [filter:drop-shadow(0_0_4px_rgba(167,139,250,0.55))]";
-
-          const iconHtml = `
-          <div class="${markerCls}" style="transform: rotate(${heading}deg);">
-            <svg viewBox="0 0 24 24" class="w-full h-full fill-current block">
-              <path d="${PLANE_SVG_PATH}"/>
-            </svg>
-          </div>`;
-
-          const icon = L.divIcon({
-            html: iconHtml,
-            className: "!bg-transparent !border-0",
-            iconSize: [18, 18],
-            iconAnchor: [9, 9],
-            popupAnchor: [0, -8],
-          });
-
-          const marker = L.marker([lat, lng], { icon, keyboard: false });
-
-          const callsign = (flight.callsign || "").trim() || "Unknown";
-          const status = flight.on_ground ? "On ground" : "Airborne";
-          const vRate =
-            flight.vertical_rate != null
-              ? `${flight.vertical_rate > 0 ? "+" : ""}${flight.vertical_rate.toFixed(
-                  1
-                )} m/s`
-              : "\u2014";
-
-          const html = `
-          <div class="${popupCardCls}">
-            <div class="${popupHeadCls}">
-              <span class="${flBadge}">${escapeHtml(callsign)}</span>
-              <div class="${popupTitleCls}">${escapeHtml(
-                flight.origin_country || "Unknown origin"
-              )}</div>
-            </div>
-            <dl class="${popupRowsCls}">
-              <dt class="${popupDtCls}">Status</dt><dd class="${popupDdCls}">${escapeHtml(
-                status
-              )}</dd>
-              <dt class="${popupDtCls}">Altitude</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatAltitude(flight.geo_altitude)
-              )}</dd>
-              <dt class="${popupDtCls}">Speed</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatVelocity(flight.velocity)
-              )}</dd>
-              <dt class="${popupDtCls}">Heading</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatHeading(flight.true_track)
-              )}</dd>
-              <dt class="${popupDtCls}">V/Rate</dt><dd class="${popupDdCls}">${escapeHtml(
-                vRate
-              )}</dd>
-              <dt class="${popupDtCls}">Seen</dt><dd class="${popupDdCls}">${escapeHtml(
-                formatFlightTime(flight.time_position)
-              )}</dd>
-            </dl>
-          </div>`;
-
-          marker.bindPopup(html, { maxWidth: 280 });
-          marker.addTo(layer);
-          bounds.push([lat, lng]);
-        });
-
-        if (refit) {
-          if (bounds.length === 0 && map) {
-            map.fitBounds(INDIA_BOUNDS, { padding: [30, 30] });
-            requestAnimationFrame(() => map.invalidateSize());
-          } else {
-            fitMapToBounds(bounds);
-          }
-        }
-      },
-      [fitMapToBounds]
-    );
-
-    const renderNews = useCallback(
-      (items: FeedItem[], opts: { refit?: boolean } = {}) => {
-        const { refit = true } = opts;
-        const L = window.L;
-        const layer = layerRef.current;
-        if (!L || !layer) return;
-
-        layer.clearLayers();
-        const bounds: [number, number][] = [];
-
-        // Group every story by its (last) matched country so each country gets
-        // a single choropleth polygon shaded by story volume.
-        const groups = new Map<
-          string,
-          { lat: number | null; lng: number | null; items: FeedItem[] }
-        >();
-
-        for (const item of items) {
-          const countryName =
-            Array.isArray(item.country) && item.country.length
-              ? item.country[item.country.length - 1]
-              : "Unknown";
-
-          const existing = groups.get(countryName);
-          if (existing) {
-            existing.items.push(item);
-            if (existing.lat == null && item.latitude != null) {
-              existing.lat = item.latitude;
-              existing.lng = item.longitude ?? null;
-            }
-          } else {
-            groups.set(countryName, {
-              lat: item.latitude ?? null,
-              lng: item.longitude ?? null,
-              items: [item],
-            });
-          }
-        }
-
-        const newsBadge =
-          "inline-flex items-center justify-center min-w-[34px] py-1 px-2 rounded-md text-[12px] font-extrabold tracking-[0.6px] text-[#0a0d14] bg-[linear-gradient(135deg,#4ade80,#22c55e)]";
-
-        groups.forEach((group, country) => {
-          const count = group.items.length;
-
-          const itemsList = group.items
-            .slice(0, 6)
-            .map(
-              (f) => `
-              <a href="${escapeHtml(f.link)}" target="_blank" rel="noopener noreferrer"
-                class="block py-1.5 border-b border-[#1a1f2b] last:border-b-0 text-inherit no-underline transition-colors hover:text-[#22c55e]">
-                <div class="flex items-center gap-1.5 mb-0.5">
-                  <span class="text-[9px] font-bold tracking-[0.6px] uppercase text-[#8a93a6]">${escapeHtml(
-                    f.source || ""
-                  )}</span>
-                  ${
-                    f.category
-                      ? `<span class="text-[9px] text-[#5b6273] tracking-[0.4px]">\u00b7 ${escapeHtml(
-                          f.category
-                        )}</span>`
-                      : ""
-                  }
-                </div>
-                <div class="text-[11.5px] font-medium leading-snug text-[#e6e9ef]">${escapeHtml(
-                  f.title || ""
-                )}</div>
-              </a>`
-            )
-            .join("");
-
-          const moreText =
-            group.items.length > 6
-              ? `<div class="pt-1.5 text-[10px] text-[#5b6273] tracking-[0.4px]">+${
-                  group.items.length - 6
-                } more</div>`
-              : "";
-
-          const html = `
-          <div class="${popupCardCls}">
-            <div class="${popupHeadCls}">
-              <span class="${newsBadge}">${escapeHtml(String(count))}</span>
-              <div class="${popupTitleCls}">${escapeHtml(country)}</div>
-            </div>
-            <div class="m-0 max-h-[240px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#232a3a] [&::-webkit-scrollbar-thumb]:rounded-[2px]">
-              ${itemsList}
-              ${moreText}
-            </div>
-          </div>`;
-
-          const tooltip = `${escapeHtml(country)} \u00b7 ${count} ${
-            count === 1 ? "story" : "stories"
-          }`;
-
-          const feature = lookupCountryFeature(
-            country,
-            countryFeaturesRef.current
-          );
-
-          if (feature) {
-            const intensity = Math.min(0.62, 0.16 + Math.log2(count + 1) * 0.09);
-            const gj = L.geoJSON(feature as never, {
-              style: {
-                color: "#22c55e",
-                weight: 1,
-                opacity: 0.9,
-                fillColor: "#22c55e",
-                fillOpacity: intensity,
-              },
-            });
-
-            gj.on("mouseover", () =>
-              gj.setStyle({ weight: 2, fillOpacity: Math.min(0.8, intensity + 0.15) })
-            );
-            gj.on("mouseout", () =>
-              gj.setStyle({ weight: 1, fillOpacity: intensity })
-            );
-
-            gj.bindPopup(html, { maxWidth: 320 });
-            gj.bindTooltip(tooltip, { sticky: true, direction: "top" });
-            gj.addTo(layer);
-
-            const b = gj.getBounds();
-            if (b && b.isValid()) {
-              bounds.push([b.getSouth(), b.getWest()]);
-              bounds.push([b.getNorth(), b.getEast()]);
-            }
-          } else if (group.lat != null && group.lng != null) {
-            // Fallback dot for countries with no boundary in the GeoJSON.
-            const radius = Math.min(14, 5 + Math.log2(count + 1) * 2.4);
-            const marker = L.circleMarker([group.lat, group.lng], {
-              radius,
-              color: "#22c55e",
-              fillColor: "#22c55e",
-              fillOpacity: 0.55,
-              weight: 1.5,
-              opacity: 1,
-            });
-            marker.bindPopup(html, { maxWidth: 320 });
-            marker.bindTooltip(tooltip, { direction: "top" });
-            marker.addTo(layer);
-            bounds.push([group.lat, group.lng]);
-          }
-        });
-
-        if (refit) fitMapToBounds(bounds);
-      },
-      [fitMapToBounds]
-    );
-
-    const displayCached = useCallback(
-      (tab: HazardTab, opts: { refit?: boolean } = {}) => {
-        const meta = TAB_META[tab];
-        const list = cacheRef.current[tab] || [];
-
-        if (tab === "earthquake") {
-          renderEarthquakes(list as EarthquakeEvent[], opts);
-        } else if (tab === "wildfire") {
-          renderWildfires(list as WildfireEvent[], opts);
-        } else if (tab === "flight") {
-          renderFlights(list as FlightEvent[], opts);
-        } else {
-          renderNews(list as FeedItem[], opts);
-        }
-
-        setHazardCount(String(list.length));
-        setHazardError(false);
-        setHazardStatus(
-          list.length
-            ? `${list.length} ${
-                list.length === 1 ? meta.eventLabel : meta.eventLabelPlural
-              } loaded`
-            : meta.empty
-        );
-      },
-      [renderEarthquakes, renderWildfires, renderFlights, renderNews]
-    );
-
-    const loadHazardTab = useCallback(
-      async (tab: HazardTab, force = false, silent = false) => {
-        if (tab === "news") return;
-
-        const meta = TAB_META[tab];
-        const isActive = activeTabRef.current === tab;
-
-        if (loadedRef.current[tab] && !force) {
-          if (isActive) displayCached(tab);
-          return;
-        }
-
-        if (isActive && !silent) {
-          setOverlayText(meta.overlayText);
-          setOverlayActive(true);
-          setHazardStatus(meta.loading);
-          setHazardError(false);
-          setHazardCount("\u2026");
-          layerRef.current?.clearLayers();
-        }
-
-        try {
-          const res = await fetch(meta.endpoint);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-          const data = await res.json();
-          const list = Array.isArray(data) ? data : [];
-
-          cacheRef.current[tab] = list as never;
-          loadedRef.current[tab] = true;
-
-          if (activeTabRef.current === tab) {
-            displayCached(tab, { refit: !silent });
-          }
-        } catch (err) {
-          console.error(err);
-          if (activeTabRef.current === tab && !silent) {
-            setHazardCount("\u2014");
-            setHazardStatus(meta.fail);
-            setHazardError(true);
-            layerRef.current?.clearLayers();
-          }
-        } finally {
-          if (activeTabRef.current === tab && !silent) setOverlayActive(false);
-        }
-      },
-      [displayCached]
-    );
-
-    const switchTab = useCallback(
-      (tab: HazardTab) => {
-        if (tab === activeTabRef.current) return;
-
-        activeTabRef.current = tab;
-        setActiveTab(tab);
-        layerRef.current?.clearLayers();
-
-        if (tab === "news") {
-          newsNeedsFitRef.current = true;
-          requestAnimationFrame(() => mapRef.current?.invalidateSize());
-          return;
-        }
-
-        if (loadedRef.current[tab]) {
-          displayCached(tab);
-          requestAnimationFrame(() => mapRef.current?.invalidateSize());
-        } else {
-          loadHazardTab(tab);
-        }
-      },
-      [displayCached, loadHazardTab]
-    );
+    useEffect(() => {
+      loadEarthquakes();
+    }, [loadEarthquakes]);
 
     useImperativeHandle(
       ref,
-      () => ({
-        refresh: () => loadHazardTab(activeTabRef.current, true),
-      }),
-      [loadHazardTab]
+      () => ({ refresh: () => loadEarthquakes() }),
+      [loadEarthquakes]
     );
 
-    useEffect(() => {
-      if (activeTab !== "flight") return;
+    // Group geotagged stories by country into choropleth polygons.
+    const polygons = useMemo<GlobePolygon[]>(() => {
+      if (countryFeatures.size === 0 || !feeds) return [];
 
-      loadHazardTab("flight", true, true);
-      const interval = setInterval(
-        () => loadHazardTab("flight", true, true),
-        15000
-      );
-      return () => clearInterval(interval);
-    }, [activeTab, loadHazardTab]);
+      const groups = new Map<string, FeedItem[]>();
+      for (const item of feeds) {
+        const countries = Array.isArray(item.country)
+          ? item.country.filter(Boolean)
+          : [];
+        if (countries.length === 0) continue;
 
-    useEffect(() => {
-      let cancelled = false;
-
-      loadLeaflet()
-        .then((L: any) => {
-          if (cancelled || !mapElRef.current || mapRef.current) return;
-
-          const map = L.map(mapElRef.current, {
-            center: [20, 0],
-            zoom: 2,
-            minZoom: 2,
-            worldCopyJump: true,
-            zoomControl: true,
-          });
-
-          L.tileLayer(
-            "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-            {
-              attribution:
-                '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-              subdomains: "abcd",
-              maxZoom: 19,
-            }
-          ).addTo(map);
-
-          mapRef.current = map;
-          layerRef.current = L.layerGroup().addTo(map);
-          setMapReady(true);
-
-          loadHazardTab(activeTabRef.current);
-        })
-        .catch((err) => {
-          console.error(err);
-          setHazardStatus("Failed to load map library.");
-          setHazardError(true);
-          setOverlayActive(false);
-        });
-
-      return () => {
-        cancelled = true;
-      };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    useEffect(() => {
-      if (feeds === null) {
-        if (activeTab === "news" && mapReady) {
-          setOverlayText(TAB_META.news.overlayText);
-          setOverlayActive(true);
-          setHazardStatus(TAB_META.news.loading);
-          setHazardError(false);
-          setHazardCount("\u2026");
+        for (const country of countries) {
+          const existing = groups.get(country);
+          if (existing) existing.push(item);
+          else groups.set(country, [item]);
         }
-        return;
       }
 
-      const withCoords = feeds.filter(
-        (f) => f.latitude != null && f.longitude != null
-      );
-      cacheRef.current.news = withCoords;
-      loadedRef.current.news = true;
+      const result: GlobePolygon[] = [];
+      groups.forEach((items, country) => {
+        const feature = lookupCountryFeature(country, countryFeatures);
+        if (!feature) return;
 
-      if (activeTab !== "news" || !mapReady) return;
+        const count = items.length;
+        const maxImportance = Math.max(
+          ...items.map((item) => item.importance ?? 0)
+        );
+        const intensity = Math.min(
+          0.72,
+          0.28 + Math.log2(count + 1) * 0.1 + maxImportance * 0.04
+        );
 
-      const refit = newsNeedsFitRef.current;
-      newsNeedsFitRef.current = false;
-      renderNews(withCoords, { refit });
+        result.push({
+          feature,
+          country,
+          count,
+          altitude: 0.012,
+          capColor: `rgba(22,101,52,${intensity.toFixed(3)})`,
+          label: newsTooltip(country, items),
+          payload: items,
+        });
+      });
+      return result;
+    }, [feeds, countryFeatures]);
 
-      const meta = TAB_META.news;
-      setHazardCount(String(withCoords.length));
-      setHazardError(feedsError);
-      setHazardStatus(
-        feedsError
-          ? meta.fail
-          : withCoords.length
-          ? `${withCoords.length} ${
-              withCoords.length === 1 ? meta.eventLabel : meta.eventLabelPlural
-            } mapped`
-          : meta.empty
-      );
-      setOverlayActive(false);
-    }, [feeds, activeTab, mapReady, geoReady, renderNews, feedsError]);
+    // Earthquakes become glowing points sized/colored by magnitude.
+    const points = useMemo<GlobePoint[]>(() => {
+      return earthquakes
+        .filter((eq) => eq.coordinates && eq.coordinates.length >= 2)
+        .map((eq) => {
+          const mag = eq.magnitude ?? 0;
+          const color = earthquakeColor(mag);
+          return {
+            lat: eq.coordinates[1],
+            lng: eq.coordinates[0],
+            color,
+            radius: Math.min(0.7, 0.18 + Math.max(0, mag - 4) * 0.08),
+            altitude: 0.01 + Math.max(0, mag - 4) * 0.012,
+            label: quakeTooltip(eq, color),
+            payload: eq,
+          };
+        });
+    }, [earthquakes]);
 
-    const meta = TAB_META[activeTab];
+    const handlePolygonClick = useCallback((p: GlobePolygon) => {
+      setSelection({
+        kind: "news",
+        country: p.country,
+        items: (p.payload as FeedItem[]) ?? [],
+      });
+    }, []);
+
+    const handlePointClick = useCallback((p: GlobePoint) => {
+      setSelection({ kind: "quake", eq: p.payload as EarthquakeEvent });
+    }, []);
+
+    const storyCount = polygons.reduce((sum, p) => sum + p.count, 0);
+    const quakeCount = points.length;
+
+    const geoLoading = countryFeatures.size === 0;
+    const hasError = feedsError && quakeError;
+
+    let statusText: string;
+    if (hasError) {
+      statusText = "Failed to load live map data.";
+    } else if (feedsLoading) {
+      statusText = `Loading news feeds\u2026 \u00b7 ${quakeCount} ${
+        quakeCount === 1 ? "earthquake" : "earthquakes"
+      } mapped`;
+    } else {
+      const storyLabel = `${storyCount} ${
+        storyCount === 1 ? "story" : "stories"
+      }`;
+      const quakeLabel = `${quakeCount} ${
+        quakeCount === 1 ? "earthquake" : "earthquakes"
+      }`;
+      const note = feedsError
+        ? " \u00b7 news feed unavailable"
+        : quakeError
+        ? " \u00b7 seismic feed unavailable"
+        : "";
+      statusText = `${storyLabel} \u00b7 ${quakeLabel} mapped${note}`;
+    }
 
     return (
       <section
         className={[
           "relative overflow-hidden rounded-[10px] border border-[#1f2533] mb-[18px]",
           "shadow-[0_8px_24px_rgba(0,0,0,0.35)]",
-          "transition-[background,border-color] duration-300",
-          "before:content-[''] before:absolute before:top-0 before:left-0 before:right-0 before:h-0.5 before:opacity-90 before:z-2 before:transition-[background] before:duration-300",
-          PANEL_BG[activeTab],
-          ACCENT_BAR[activeTab],
+          "bg-[#11151f] bg-[linear-gradient(180deg,rgba(34,197,94,0.05),transparent_30%)]",
+          "before:content-[''] before:absolute before:top-0 before:left-0 before:right-0 before:h-0.5 before:opacity-90 before:z-2",
+          "before:bg-[linear-gradient(90deg,transparent,#22c55e_20%,#38bdf8_80%,transparent)]",
         ].join(" ")}
       >
         <div className="flex items-start justify-between gap-3 py-3.5 px-4 pb-3 border-b border-[#1a1f2b]">
           <div className="min-w-0 flex-1">
-            <nav
-              className="inline-flex gap-1 p-1 mb-2 bg-[#0f131c] border border-[#1a1f2b] rounded-lg"
-              role="tablist"
-              aria-label="Map layers"
-            >
-              {HAZARD_TABS.map((tab) => {
-                const isActive = activeTab === tab;
-                return (
-                  <button
-                    key={tab}
-                    type="button"
-                    role="tab"
-                    aria-selected={isActive}
-                    aria-controls="hazard-map"
-                    onClick={() => switchTab(tab)}
-                    className={[
-                      "inline-flex items-center gap-2 py-[7px] px-3.5 max-[640px]:px-2.5 rounded-md cursor-pointer",
-                      "text-[11px] font-bold tracking-[1.2px] uppercase",
-                      "border transition-[color,background,border-color,box-shadow] duration-180",
-                      isActive
-                        ? TAB_ACTIVE[tab]
-                        : "bg-transparent border-transparent text-[#8a93a6] hover:text-[#e6e9ef] hover:bg-white/2.5",
-                    ].join(" ")}
-                  >
-                    <TabIcon tab={tab} />
-                    <span className="max-[640px]:hidden">{TAB_LABEL[tab]}</span>
-                  </button>
-                );
-              })}
-            </nav>
+            <h2 className="text-[13px] font-bold tracking-[0.4px] text-[#e6e9ef] m-0 mb-1">
+              Global Live Globe
+            </h2>
             <p className="text-[#5b6273] text-[11px] leading-[1.4] tracking-[0.3px] m-0">
-              {meta.subtitle}
+              {MAP_SUBTITLE}
             </p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -925,43 +329,27 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
               LIVE
             </span>
             <span className="text-[10px] font-semibold text-[#8a93a6] py-0.5 px-[7px] rounded-[10px] bg-[#161b27] border border-[#1f2533] min-w-[22px] text-center">
-              {hazardCount}
+              {storyCount + quakeCount}
             </span>
           </div>
         </div>
 
-        <div
-          className={[
-            "relative",
-            "[&_.leaflet-container]:bg-[#0f131c] [&_.leaflet-container]:font-[inherit]",
-            "[&_.leaflet-control-zoom_a]:bg-[#161b27]! [&_.leaflet-control-zoom_a]:text-[#e6e9ef]! [&_.leaflet-control-zoom_a]:border! [&_.leaflet-control-zoom_a]:border-[#1f2533]!",
-            "[&_.leaflet-control-zoom_a:hover]:bg-[#1b2230]!",
-            "[&_.leaflet-control-attribution]:bg-[rgba(15,19,28,0.8)]! [&_.leaflet-control-attribution]:text-[#5b6273]!",
-            "[&_.leaflet-control-attribution_a]:text-[#8a93a6]!",
-            "[&_.leaflet-popup-content-wrapper]:bg-[#161b27]! [&_.leaflet-popup-content-wrapper]:text-[#e6e9ef]!",
-            "[&_.leaflet-popup-content-wrapper]:border! [&_.leaflet-popup-content-wrapper]:border-[#1f2533]!",
-            "[&_.leaflet-popup-content-wrapper]:shadow-[0_12px_32px_rgba(0,0,0,0.6)]!",
-            "[&_.leaflet-popup-tip]:bg-[#161b27]! [&_.leaflet-popup-tip]:border! [&_.leaflet-popup-tip]:border-[#1f2533]!",
-            "[&_.leaflet-popup-content]:m-0! [&_.leaflet-popup-content]:text-xs! [&_.leaflet-popup-content]:leading-normal! [&_.leaflet-popup-content]:min-w-[200px]!",
-            "[&_.leaflet-popup-close-button]:text-[#5b6273]! [&_.leaflet-popup-close-button]:pt-1.5! [&_.leaflet-popup-close-button]:pr-2!",
-            "[&_.leaflet-popup-close-button:hover]:text-[#e6e9ef]!",
-          ].join(" ")}
-        >
-          <div
-            ref={mapElRef}
-            id="hazard-map"
-            role="tabpanel"
-            aria-label="Hazard map"
-            className="h-[420px] max-[640px]:h-[320px] w-full bg-[#0f131c] z-0"
+        <div className="relative h-[460px] max-[640px]:h-[360px] w-full bg-black overflow-hidden">
+          <GlobeView
+            polygons={polygons}
+            points={points}
+            onPolygonClick={handlePolygonClick}
+            onPointClick={handlePointClick}
+            onGlobeClick={() => setSelection(null)}
           />
 
           <div
-            aria-hidden={!overlayActive}
+            aria-hidden={!geoLoading}
             className={[
               "absolute inset-0 flex flex-col items-center justify-center gap-3.5 z-500",
               "bg-[rgba(10,13,20,0.72)] backdrop-blur-[2px]",
               "transition-opacity duration-250",
-              overlayActive
+              geoLoading
                 ? "opacity-100 pointer-events-auto"
                 : "opacity-0 pointer-events-none",
             ].join(" ")}
@@ -969,32 +357,161 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
             <div
               role="status"
               aria-live="polite"
-              className={`relative w-[52px] h-[52px] ${SPINNER_COLOR[activeTab]}`}
+              className="relative w-[52px] h-[52px] text-[#22c55e]"
             >
               <div className="absolute inset-0 border-2 border-transparent rounded-full border-t-current animate-[spin_1.1s_linear_infinite]" />
               <div className="absolute inset-[7px] border-2 border-transparent rounded-full border-r-current opacity-70 animate-[spin_1.6s_linear_infinite_reverse]" />
               <div className="absolute inset-[14px] border-2 border-transparent rounded-full border-b-current opacity-40 animate-[spin_2.1s_linear_infinite]" />
             </div>
             <div className="text-[11px] font-bold tracking-[2px] uppercase text-[#8a93a6]">
-              {overlayText}
+              Spinning up the globe
             </div>
           </div>
 
-          <MapLegend activeTab={activeTab} />
+          {selection ? (
+            <DetailPanel
+              selection={selection}
+              onClose={() => setSelection(null)}
+            />
+          ) : null}
+
+          <MapLegend />
         </div>
 
         <div
           className={[
             "flex items-center gap-2 py-2.5 px-4 text-[11px] tracking-[0.3px] border-t border-[#1a1f2b]",
             "before:content-[''] before:w-1.5 before:h-1.5 before:rounded-full before:shadow-[0_0_4px_currentColor]",
-            hazardError
+            hasError
               ? "text-[#ef4444] before:bg-[#ef4444]"
-              : `text-[#8a93a6] ${STATUS_DOT[activeTab]}`,
+              : "text-[#8a93a6] before:bg-[#22c55e]",
           ].join(" ")}
         >
-          {hazardStatus}
+          {statusText}
         </div>
       </section>
     );
   }
 );
+
+function DetailPanel({
+  selection,
+  onClose,
+}: {
+  selection: NonNullable<Selection>;
+  onClose: () => void;
+}) {
+  const panelCls =
+    "absolute top-3 right-3 z-500 w-[300px] max-[640px]:w-[calc(100%-1.5rem)] max-h-[calc(100%-1.5rem)] overflow-y-auto rounded-lg border border-[#1f2533] bg-[rgba(15,19,28,0.95)] backdrop-blur-md shadow-[0_12px_32px_rgba(0,0,0,0.6)]";
+
+  if (selection.kind === "quake") {
+    const eq = selection.eq;
+    const mag = eq.magnitude ?? 0;
+    const color = earthquakeColor(mag);
+    const depth =
+      eq.coordinates?.[2] != null
+        ? `${Number(eq.coordinates[2]).toFixed(1)} km`
+        : "\u2014";
+    const felt = eq.felt != null ? formatNumber(eq.felt) : "\u2014";
+    const cdi = eq.cdi != null ? String(eq.cdi) : "\u2014";
+
+    return (
+      <div className={panelCls}>
+        <PanelHeader onClose={onClose}>
+          <span
+            className="inline-flex items-center justify-center min-w-[42px] py-1 px-2 rounded-md text-[13px] font-extrabold text-[#0a0d14]"
+            style={{ background: color }}
+          >
+            M {mag.toFixed(1)}
+          </span>
+          <span className="text-[12.5px] font-semibold text-[#e6e9ef] leading-[1.35] flex-1 min-w-0">
+            {eq.place || "Unknown location"}
+          </span>
+        </PanelHeader>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-2.5 gap-y-[5px] text-[11.5px] m-0 p-3 px-3.5">
+          <PanelRow label="Depth" value={depth} />
+          <PanelRow label="Felt" value={felt} />
+          <PanelRow label="CDI" value={cdi} />
+          <PanelRow label="Time" value={formatEarthquakeTime(eq.time)} />
+        </dl>
+      </div>
+    );
+  }
+
+  const { country, items } = selection;
+  return (
+    <div className={panelCls}>
+      <PanelHeader onClose={onClose}>
+        <span className="inline-flex items-center justify-center min-w-[34px] py-1 px-2 rounded-md text-[12px] font-extrabold text-[#0a0d14] bg-[linear-gradient(135deg,#4ade80,#22c55e)]">
+          {items.length}
+        </span>
+        <span className="text-[12.5px] font-semibold text-[#e6e9ef] leading-[1.35] flex-1 min-w-0">
+          {country}
+        </span>
+      </PanelHeader>
+      <div className="p-2 px-3.5 pb-3">
+        {items.slice(0, 12).map((f, i) => (
+          <a
+            key={`${f.link}-${i}`}
+            href={f.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block py-1.5 border-b border-[#1a1f2b] last:border-b-0 no-underline transition-colors hover:text-[#22c55e]"
+          >
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <span className="text-[9px] font-bold tracking-[0.6px] uppercase text-[#8a93a6]">
+                {f.source || ""}
+              </span>
+              {f.category ? (
+                <span className="text-[9px] text-[#5b6273] tracking-[0.4px]">
+                  {"\u00b7"} {f.category}
+                </span>
+              ) : null}
+            </div>
+            <div className="text-[11.5px] font-medium leading-snug text-[#e6e9ef]">
+              {f.title || ""}
+            </div>
+          </a>
+        ))}
+        {items.length > 12 ? (
+          <div className="pt-1.5 text-[10px] text-[#5b6273] tracking-[0.4px]">
+            +{items.length - 12} more
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function PanelHeader({
+  children,
+  onClose,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2.5 p-3 px-3.5 border-b border-[#1a1f2b] sticky top-0 bg-[rgba(15,19,28,0.95)]">
+      {children}
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close"
+        className="shrink-0 text-[#5b6273] hover:text-[#e6e9ef] text-[16px] leading-none cursor-pointer"
+      >
+        {"\u00d7"}
+      </button>
+    </div>
+  );
+}
+
+function PanelRow({ label, value }: { label: string; value: string }) {
+  return (
+    <>
+      <dt className="text-[#5b6273] font-semibold uppercase text-[10px] tracking-[0.8px] self-center">
+        {label}
+      </dt>
+      <dd className="text-[#e6e9ef] m-0">{value}</dd>
+    </>
+  );
+}
