@@ -29,8 +29,7 @@ const GlobeView = dynamic(() => import("@/components/vision/GlobeView"), {
   ssr: false,
 });
 
-// Maps the official ISO country names emitted by the backend (countries.py)
-// onto the common names used in public/countries.geojson. Keys are normalized
+// onto the common names used in public/custom.geo.json. Keys are normalized
 // (see normalizeCountryName), values are the GeoJSON "name" property.
 const COUNTRY_NAME_ALIASES: Record<string, string> = {
   "russian federation": "Russia",
@@ -158,7 +157,7 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
     // Load country boundaries once for the news choropleth.
     useEffect(() => {
       let cancelled = false;
-      fetch("/countries.geojson")
+      fetch("/custom.geo.json")
         .then((res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.json();

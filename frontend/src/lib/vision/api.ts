@@ -82,7 +82,7 @@ export async function fetchEarthquakes(): Promise<EarthquakeEvent[]> {
   const res = await fetch(EARTHQUAKES_ENDPOINT);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
-  return Array.isArray(data) ? (data as EarthquakeEvent[]) : [];
+  return Array.isArray(data) ? data : (data.earthquakes ?? []);
 }
 
 export async function fetchVideos(): Promise<VideoItem[]> {

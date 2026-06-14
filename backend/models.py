@@ -19,9 +19,6 @@ class video(BaseModel):
     summary: str
     source: str
 
-class Feeds(BaseModel):
-    feeds: List[feed]
-
 class earthquakeEvent(BaseModel):
     magnitude: float
     place: str

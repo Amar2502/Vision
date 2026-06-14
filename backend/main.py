@@ -19,7 +19,6 @@ app = FastAPI()
 
 llm = ChatOllama(model="phi3")
 
-
 @app.get("/")
 def home():
     return {"message": "Vision Dashboard API"}   
@@ -64,7 +63,8 @@ async def summarize(request: Request):
 
 @app.get("/videos", response_model=List[video])
 async def get_videos():
-    return fetch_videos()
+    result = await fetch_videos()
+    return result
 
 @app.post("/videos/summarize")
 async def summarize_video(request: Request):
@@ -73,7 +73,7 @@ async def summarize_video(request: Request):
     video_id = data.get("id", "")
 
     if not video_id:
-        return "No transcript found"
+       return {"error": "No video ID provided"}
 
     ytt_api = YouTubeTranscriptApi()
 
@@ -83,17 +83,17 @@ async def summarize_video(request: Request):
             video_id
         )
     except Exception:
-        return "No transcript found"
+        return {"error": "No transcript found"}
 
     if not fetched_transcript:
-        return "No transcript found"
+        return {"error": "No transcript found"}
 
     text = " ".join(
         snippet.text for snippet in fetched_transcript
     ).strip()
 
     if not text:
-        return "No transcript found"
+        return {"error": "No transcript found"}
 
     response = await llm.ainvoke([
         SystemMessage(

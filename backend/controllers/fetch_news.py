@@ -1,14 +1,15 @@
 import asyncio
 import feedparser # type: ignore
-import time
 from ingestion_source.news import NEWS_URLS
 import httpx
 from models import feed
 from datetime import date, datetime, timedelta
 import json
 from utils.get_countries import get_countries
+from utils.country_list import country_list
+from utils.get_importance import get_importance
 
-async def fetch_single_news(news_urls, client, seen_titles, llm):
+async def fetch_single_news(news_urls, client, seen_titles, llm, lock: asyncio.Lock):
 
     local_feeds = []
 
@@ -17,17 +18,27 @@ async def fetch_single_news(news_urls, client, seen_titles, llm):
     source = news_urls["source"]
     url = news_urls["url"]
 
-    response = await client.get(url)
+    try:
+        response = await client.get(url)
+    except Exception as e:
+        print(f"Error fetching feed {url}: {e}")
+        return {
+            "source": source,
+            "feeds": [],
+            "message": "Failed to fetch feed"
+        }
+    
     parsed_feed = feedparser.parse(response.text)
 
     for entry in parsed_feed.entries:
 
         title = entry.get("title", "")
 
-        if title in seen_titles:
-            continue
+        async with lock:
+            if title in seen_titles:
+                continue
 
-        seen_titles.add(title)
+            seen_titles.add(title)
 
         if not entry.get("published_parsed"):
             continue
@@ -36,9 +47,18 @@ async def fetch_single_news(news_urls, client, seen_titles, llm):
 
         if published_date == date.today() or published_date == date.today() - timedelta(days=1):
 
-            result = await get_countries(title, entry.get("summary", ""), llm)
-            importance = result.importance
-            countries = result.countries
+            countries = []
+
+            for country in country_list:
+                if country in title.lower() or country in entry.get("summary", "").lower():
+                    countries.append(country)
+
+            if countries:
+                importance = get_importance(title, entry.get("summary", ""))
+            else:
+                result = await get_countries(title, entry.get("summary", ""), llm)
+                importance = result.importance
+                countries = result.countries
 
             response_feed = feed(
                 source=source,
@@ -63,6 +83,8 @@ async def fetch_news(llm):
 
     seen_titles = set()
 
+    lock = asyncio.Lock()
+
     tasks = []
 
     headers = {
@@ -76,7 +98,7 @@ async def fetch_news(llm):
     
     async with httpx.AsyncClient(headers=headers) as client:
         for news_url in NEWS_URLS:
-            task = asyncio.create_task(fetch_single_news(news_url, client, seen_titles, llm))
+            task = asyncio.create_task(fetch_single_news(news_url, client, seen_titles, llm, lock))
             tasks.append(task)
 
         for task in asyncio.as_completed(tasks):

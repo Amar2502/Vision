@@ -1,7 +1,6 @@
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 from typing import List
-import time
 
 async def get_countries(heading: str, summary: str, llm: ChatOllama):
 

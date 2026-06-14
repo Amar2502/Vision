@@ -33,10 +33,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-credentials.json
-
-*.json
-
 # Virtual environments
 venv/
 env/

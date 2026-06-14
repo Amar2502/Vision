@@ -22,6 +22,12 @@ async def fetch_earthquake():
             params=params
         )
 
+        if response.status_code != 200:
+            return {
+                "earthquakes": [],
+                "message": "Failed to fetch earthquake data"
+            }
+
         data = response.json()
 
     for feature in data["features"]:
@@ -40,4 +46,7 @@ async def fetch_earthquake():
 
     print(f"Time taken for Earthquake: {time.time() - start} seconds")
 
-    return earthquakes
+    return {
+        "earthquakes": earthquakes,
+        "message": "Earthquake data fetched successfully"
+    }

@@ -36,7 +36,7 @@ NEWS_URLS = [
     # },
     {
         "url": "https://www.aljazeera.com/xml/rss/all.xml",
-        "source": "Reuters",
+        "source": "Al Jazeera",
         "category": "Middle East"
     },
     # {
@@ -50,7 +50,7 @@ NEWS_URLS = [
     #     "category": "Space"
     # },
     {
-        "url": "http://feeds.arstechnica.com/arstechnica/science",
+        "url": "https://feeds.arstechnica.com/arstechnica/science",
         "source": "Ars Technica",
         "category": "Science"
     },
@@ -71,7 +71,7 @@ NEWS_URLS = [
     },
     {
         "url": "https://techcrunch.com/feed/",
-        "source": "techcrunch",
+        "source": "TechCrunch",
         "category": "Technology"
     },
     # {
