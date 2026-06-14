@@ -107,5 +107,28 @@ export async function summarizeVideo(id: string): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id }),
   });
-  return parseTextResponse(res);
+
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new Error(raw || `HTTP ${res.status}`);
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === "string") return parsed;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "error" in parsed &&
+      typeof (parsed as { error: unknown }).error === "string"
+    ) {
+      const message = (parsed as { error: string }).error;
+      if (message === NO_VIDEO_TRANSCRIPT) return NO_VIDEO_TRANSCRIPT;
+      throw new Error(message);
+    }
+    return String(parsed);
+  } catch (err) {
+    if (err instanceof SyntaxError) return raw.trim();
+    throw err;
+  }
 }

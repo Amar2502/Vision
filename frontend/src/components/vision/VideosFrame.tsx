@@ -9,6 +9,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { SummarizeIcon } from "@/components/vision/NewsItem";
+import { LiveBadge } from "@/components/vision/LiveBadge";
 import { NO_VIDEO_TRANSCRIPT, summarizeVideo } from "@/lib/vision/api";
 import { timeAgo } from "@/lib/vision/helpers";
 import type { VideoItem } from "@/lib/vision/types";
@@ -41,9 +42,11 @@ function groupVideosBySource(
 interface VideosFrameProps {
   videos: VideoItem[] | null;
   error: boolean;
+  live: boolean;
+  pulsing: boolean;
 }
 
-export function VideosFrame({ videos, error }: VideosFrameProps) {
+export function VideosFrame({ videos, error, live, pulsing }: VideosFrameProps) {
   const bySource = useMemo(() => groupVideosBySource(videos), [videos]);
   const sources = useMemo(
     () =>
@@ -151,9 +154,7 @@ export function VideosFrame({ videos, error }: VideosFrameProps) {
           </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="inline-flex items-center gap-1 text-[9px] font-bold tracking-[1px] py-0.5 px-1.5 rounded-[3px] bg-[rgba(239,68,68,0.15)] text-[#ef4444] border border-[rgba(239,68,68,0.35)] before:content-[''] before:w-[5px] before:h-[5px] before:rounded-full before:bg-[#ef4444] before:shadow-[0_0_6px_#ef4444] before:animate-pulse">
-            LIVE
-          </span>
+          <LiveBadge active={live} pulsing={pulsing} variant="red" />
           <span className="text-[10px] font-semibold text-[#8a93a6] py-0.5 px-[7px] rounded-[10px] bg-[#161b27] border border-[#1f2533] min-w-[22px] text-center">
             {videos === null ? "\u2026" : count}
           </span>

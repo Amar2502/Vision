@@ -89,6 +89,53 @@ export function escapeHtml(text: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+const NON_SUMMARIZABLE_HOSTS = [
+  "youtube.com",
+  "youtu.be",
+  "twitter.com",
+  "x.com",
+  "facebook.com",
+  "instagram.com",
+  "reddit.com",
+  "news.google.com",
+  "t.co",
+  "linkedin.com",
+  "tiktok.com",
+  "vimeo.com",
+];
+
+const NON_SUMMARIZABLE_EXT = /\.(pdf|mp3|mp4|zip)(\?|$)/i;
+
 export function isSummarizableSource(link?: string): boolean {
-  return Boolean(link?.trim());
+  if (!link?.trim()) return false;
+
+  try {
+    const url = new URL(link);
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+
+    const host = url.hostname.replace(/^www\./, "").toLowerCase();
+    if (
+      NON_SUMMARIZABLE_HOSTS.some(
+        (blocked) => host === blocked || host.endsWith(`.${blocked}`)
+      )
+    ) {
+      return false;
+    }
+
+    if (NON_SUMMARIZABLE_EXT.test(url.pathname)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Matches the choropleth opacity formula in HazardMap. */
+export function countryChoroplethIntensity(
+  storyCount: number,
+  maxImportance = 0
+): number {
+  return Math.min(
+    0.72,
+    0.28 + Math.log2(storyCount + 1) * 0.1 + maxImportance * 0.04
+  );
 }

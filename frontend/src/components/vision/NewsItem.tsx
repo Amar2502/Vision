@@ -46,9 +46,10 @@ export function SummarizeIcon({ className }: { className?: string }) {
 
 interface NewsItemProps {
   item: FeedItem;
+  highlighted?: boolean;
 }
 
-export function NewsItem({ item }: NewsItemProps) {
+export function NewsItem({ item, highlighted = false }: NewsItemProps) {
   const rssSummary = stripTags(item.summary);
   const recent = isRecent(item.published);
   const canSummarize = isSummarizableSource(item.link);
@@ -149,8 +150,19 @@ export function NewsItem({ item }: NewsItemProps) {
     </Popover>
   ) : null;
 
+  const countries = Array.isArray(item.country)
+    ? item.country.filter(Boolean)
+    : [];
+
   return (
-    <article className="relative border-b border-[#1a1f2b] last:border-b-0 transition-colors duration-150 hover:bg-white/2">
+    <article
+      className={[
+        "relative border-b border-[#1a1f2b] last:border-b-0 transition-colors duration-150",
+        highlighted
+          ? "bg-[rgba(34,197,94,0.08)] border-l-2 border-l-[#22c55e]"
+          : "hover:bg-white/2 border-l-2 border-l-transparent",
+      ].join(" ")}
+    >
       {summarizeControl}
 
       <a
@@ -182,6 +194,12 @@ export function NewsItem({ item }: NewsItemProps) {
                 }}
               >
                 {importanceLabel(importance)}
+              </span>
+            ) : null}
+            {countries.length > 0 ? (
+              <span className="text-[9px] font-semibold tracking-[0.4px] py-0.5 px-1.5 rounded-sm text-[#38bdf8] bg-[rgba(56,189,248,0.12)] border border-[rgba(56,189,248,0.35)] max-w-full truncate">
+                {countries.slice(0, 2).join(", ")}
+                {countries.length > 2 ? ` +${countries.length - 2}` : ""}
               </span>
             ) : null}
           </div>

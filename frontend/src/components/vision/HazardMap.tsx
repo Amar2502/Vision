@@ -14,6 +14,7 @@ import type {
   GlobePolygon,
 } from "@/components/vision/GlobeView";
 import { MapLegend } from "@/components/vision/MapLegend";
+import { LiveBadge } from "@/components/vision/LiveBadge";
 import { fetchEarthquakes } from "@/lib/vision/api";
 import { MAP_SUBTITLE } from "@/lib/vision/constants";
 import {
@@ -143,10 +144,23 @@ interface HazardMapProps {
   feeds: FeedItem[] | null;
   feedsError: boolean;
   feedsLoading: boolean;
+  refreshing?: boolean;
+  selectedCountry?: string | null;
+  onCountrySelect?: (country: string | null) => void;
 }
 
 export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
-  function HazardMap({ feeds, feedsError, feedsLoading }, ref) {
+  function HazardMap(
+    {
+      feeds,
+      feedsError,
+      feedsLoading,
+      refreshing = false,
+      selectedCountry = null,
+      onCountrySelect,
+    },
+    ref
+  ) {
     const [earthquakes, setEarthquakes] = useState<EarthquakeEvent[]>([]);
     const [quakeError, setQuakeError] = useState(false);
     const [countryFeatures, setCountryFeatures] = useState<
@@ -264,23 +278,36 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
         });
     }, [earthquakes]);
 
-    const handlePolygonClick = useCallback((p: GlobePolygon) => {
-      setSelection({
-        kind: "news",
-        country: p.country,
-        items: (p.payload as FeedItem[]) ?? [],
-      });
-    }, []);
+    const handlePolygonClick = useCallback(
+      (p: GlobePolygon) => {
+        setSelection({
+          kind: "news",
+          country: p.country,
+          items: (p.payload as FeedItem[]) ?? [],
+        });
+        onCountrySelect?.(p.country);
+      },
+      [onCountrySelect]
+    );
 
     const handlePointClick = useCallback((p: GlobePoint) => {
       setSelection({ kind: "quake", eq: p.payload as EarthquakeEvent });
-    }, []);
+      onCountrySelect?.(null);
+    }, [onCountrySelect]);
+
+    const handleGlobeClick = useCallback(() => {
+      setSelection(null);
+      onCountrySelect?.(null);
+    }, [onCountrySelect]);
 
     const storyCount = polygons.reduce((sum, p) => sum + p.count, 0);
     const quakeCount = points.length;
 
     const geoLoading = countryFeatures.size === 0;
     const hasError = feedsError && quakeError;
+    const mapLive = !hasError && (storyCount > 0 || quakeCount > 0);
+    const mapPulsing =
+      mapLive && (feedsLoading || refreshing || geoLoading);
 
     let statusText: string;
     if (hasError) {
@@ -324,9 +351,7 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
             </p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <span className="inline-flex items-center gap-1 text-[9px] font-bold tracking-[1px] py-0.5 px-1.5 rounded-[3px] bg-[rgba(34,197,94,0.15)] text-[#22c55e] border border-[rgba(34,197,94,0.35)] before:content-[''] before:w-[5px] before:h-[5px] before:rounded-full before:bg-[#22c55e] before:shadow-[0_0_6px_#22c55e] before:animate-pulse">
-              LIVE
-            </span>
+            <LiveBadge active={mapLive} pulsing={mapPulsing} />
             <span className="text-[10px] font-semibold text-[#8a93a6] py-0.5 px-[7px] rounded-[10px] bg-[#161b27] border border-[#1f2533] min-w-[22px] text-center">
               {storyCount + quakeCount}
             </span>
@@ -339,13 +364,14 @@ export const HazardMap = forwardRef<HazardMapHandle, HazardMapProps>(
             points={points}
             onPolygonClick={handlePolygonClick}
             onPointClick={handlePointClick}
-            onGlobeClick={() => setSelection(null)}
+            onGlobeClick={handleGlobeClick}
+            selectedCountry={selectedCountry}
           />
 
           <div
             aria-hidden={!geoLoading}
             className={[
-              "absolute inset-0 flex flex-col items-center justify-center gap-3.5 z-500",
+              "absolute inset-0 flex flex-col items-center justify-center gap-3.5 z-50",
               "bg-[rgba(10,13,20,0.72)] backdrop-blur-[2px]",
               "transition-opacity duration-250",
               geoLoading
@@ -401,7 +427,7 @@ function DetailPanel({
   onClose: () => void;
 }) {
   const panelCls =
-    "absolute top-3 right-3 z-500 w-[300px] max-[640px]:w-[calc(100%-1.5rem)] max-h-[calc(100%-1.5rem)] overflow-y-auto rounded-lg border border-[#1f2533] bg-[rgba(15,19,28,0.95)] backdrop-blur-md shadow-[0_12px_32px_rgba(0,0,0,0.6)]";
+    "absolute top-3 right-3 z-50 w-[300px] max-[640px]:w-[calc(100%-1.5rem)] max-h-[calc(100%-1.5rem)] overflow-y-auto rounded-lg border border-[#1f2533] bg-[rgba(15,19,28,0.95)] backdrop-blur-md shadow-[0_12px_32px_rgba(0,0,0,0.6)]";
 
   if (selection.kind === "quake") {
     const eq = selection.eq;

@@ -29,6 +29,7 @@ interface GlobeViewProps {
   onPolygonClick?: (p: GlobePolygon) => void;
   onPointClick?: (p: GlobePoint) => void;
   onGlobeClick?: () => void;
+  selectedCountry?: string | null;
 }
 
 const EARTH_DARK = "//unpkg.com/three-globe/example/img/earth-dark.jpg";
@@ -40,6 +41,7 @@ export default function GlobeView({
   onPolygonClick,
   onPointClick,
   onGlobeClick,
+  selectedCountry = null,
 }: GlobeViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
@@ -106,10 +108,34 @@ export default function GlobeView({
             ((d as GlobePolygon).feature as { geometry: unknown })
               .geometry as never
           }
-          polygonAltitude={(d) => (d as GlobePolygon).altitude}
-          polygonCapColor={(d) => (d as GlobePolygon).capColor}
-          polygonSideColor={() => "rgba(34,197,94,0.15)"}
-          polygonStrokeColor={() => "rgba(34,197,94,0.55)"}
+          polygonAltitude={(d) => {
+            const poly = d as GlobePolygon;
+            const selected = selectedCountry && poly.country === selectedCountry;
+            return selected ? poly.altitude + 0.006 : poly.altitude;
+          }}
+          polygonCapColor={(d) => {
+            const poly = d as GlobePolygon;
+            if (selectedCountry && poly.country === selectedCountry) {
+              return poly.capColor.replace(
+                /rgba\((\d+),(\d+),(\d+),([\d.]+)\)/,
+                (_, r, g, b) =>
+                  `rgba(${r},${g},${b},0.88)`
+              );
+            }
+            return poly.capColor;
+          }}
+          polygonSideColor={(d) => {
+            const poly = d as GlobePolygon;
+            return selectedCountry && poly.country === selectedCountry
+              ? "rgba(74,222,128,0.45)"
+              : "rgba(34,197,94,0.15)";
+          }}
+          polygonStrokeColor={(d) => {
+            const poly = d as GlobePolygon;
+            return selectedCountry && poly.country === selectedCountry
+              ? "rgba(74,222,128,0.95)"
+              : "rgba(34,197,94,0.55)";
+          }}
           polygonLabel={(d) => (d as GlobePolygon).label}
           polygonsTransitionDuration={300}
           onPolygonClick={(d) => onPolygonClick?.(d as GlobePolygon)}
