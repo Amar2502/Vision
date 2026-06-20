@@ -33,19 +33,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "frontend\node_modules" (
-  echo Installing frontend dependencies...
-  pushd frontend
-  call npm install
-  if errorlevel 1 (
-    echo ERROR: npm install failed.
-    popd
-    pause
-    exit /b 1
-  )
-  popd
-)
-
 echo Starting backend on http://localhost:8000 ...
 start /b "" /d "%~dp0backend" %PYTHON% -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
@@ -77,7 +64,6 @@ if defined BRAVE (
 echo.
 echo  Backend:  http://localhost:8000
 echo  Frontend: %URL%
-echo  Ollama:   http://localhost:11434  (phi3 — needed for AI summaries)
 echo.
 echo  Logs from both servers appear in this window.
 echo  Press any key to stop all servers and exit.

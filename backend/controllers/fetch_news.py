@@ -2,6 +2,8 @@ import asyncio
 import json
 from datetime import date, datetime, timedelta
 
+from langchain_ollama import ChatOllama # type: ignore
+
 import feedparser  # type: ignore
 import httpx
 
@@ -15,7 +17,6 @@ from database.queries import (
     get_multiple_articles,
     insert_multiple_articles,
 )
-
 
 async def fetch_single_news(
     news_urls,
@@ -125,7 +126,7 @@ async def fetch_single_news(
     }
 
 
-async def fetch_news(llm):
+async def fetch_news():
     """
     Stream format:
 
@@ -162,6 +163,8 @@ async def fetch_news(llm):
 
     seen_titles = set()
 
+    llm = ChatOllama(model="phi3")
+
     lock = asyncio.Lock()
 
     headers = {
@@ -178,7 +181,7 @@ async def fetch_news(llm):
 
         tasks = [
             asyncio.create_task(
-                fetch_single_news(
+                fetch_single_news(  
                     news_url,
                     client,
                     seen_titles,

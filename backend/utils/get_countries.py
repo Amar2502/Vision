@@ -1,4 +1,4 @@
-from langchain_ollama import ChatOllama
+from langchain_ollama import ChatOllama # type: ignore
 from pydantic import BaseModel, Field
 from typing import List
 

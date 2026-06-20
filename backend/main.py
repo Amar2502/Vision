@@ -19,7 +19,7 @@ from ai.chat import chat
 
 app = FastAPI()
 
-llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct")
+llm = ChatGroq(model="qwen/qwen3.6-27b")
 
 @app.get("/")
 def home():
@@ -28,7 +28,7 @@ def home():
 @app.get("/feeds")
 async def get_feeds():
     return StreamingResponse(
-        fetch_news(llm=llm),
+        fetch_news(),
         media_type="application/x-ndjson"
     )
 
