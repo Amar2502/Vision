@@ -1,5 +1,11 @@
-import type { EarthquakeEvent, FeedItem, VideoItem } from "./types";
+import type {
+  ChatStreamEvent,
+  EarthquakeEvent,
+  FeedItem,
+  VideoItem,
+} from "./types";
 import {
+  CHAT_ENDPOINT,
   EARTHQUAKES_ENDPOINT,
   FEEDS_ENDPOINT,
   SUMMARIZE_ENDPOINT,
@@ -131,4 +137,61 @@ export async function summarizeVideo(id: string): Promise<string> {
     if (err instanceof SyntaxError) return raw.trim();
     throw err;
   }
+}
+
+function parseSseBlock(block: string): ChatStreamEvent | null {
+  for (const line of block.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+
+    const jsonStr = trimmed.slice(5).trim();
+    if (!jsonStr) continue;
+
+    return JSON.parse(jsonStr) as ChatStreamEvent;
+  }
+
+  return null;
+}
+
+export async function streamChat(
+  inputQuery: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const res = await fetch(CHAT_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input_query: inputQuery }),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const ingest = (block: string) => {
+    const event = parseSseBlock(block);
+    if (event) onEvent(event);
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let separatorIndex: number;
+    while ((separatorIndex = buffer.indexOf("\n\n")) !== -1) {
+      const block = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+      ingest(block);
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) ingest(buffer);
 }

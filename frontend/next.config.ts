@@ -11,6 +11,7 @@ const nextConfig: NextConfig = {
         source: "/videos/summarize",
         destination: "http://localhost:8000/videos/summarize",
       },
+      { source: "/chat", destination: "http://localhost:8000/chat" },
     ];
   },
 };

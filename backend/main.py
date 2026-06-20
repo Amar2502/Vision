@@ -5,7 +5,7 @@ from typing import List
 from youtube_transcript_api import YouTubeTranscriptApi # type: ignore
 
 import trafilatura # type: ignore
-from langchain_ollama import ChatOllama # type: ignore
+from langchain_groq import ChatGroq # type: ignore
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from controllers.fetch_news import fetch_news    
@@ -14,10 +14,12 @@ from controllers.fetch_earthquake import fetch_earthquake
 
 from models import video
 
+from ai.chat import chat
+
 
 app = FastAPI()
 
-llm = ChatOllama(model="phi3")
+llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct")
 
 @app.get("/")
 def home():
@@ -107,3 +109,21 @@ async def summarize_video(request: Request):
     ])
 
     return response.content
+
+@app.post("/chat")
+async def chat_api(request: Request):
+    data = await request.json()
+
+    input_query = data.get("input_query", "")
+
+    if not input_query:
+        return {"error": "No input query provided"}
+
+    return StreamingResponse(
+        chat(input_query),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )

@@ -1,14 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChatView } from "@/components/vision/ChatView";
 import { Header } from "@/components/vision/Header";
 import { FilterBar } from "@/components/vision/FilterBar";
 import { HazardMap, type HazardMapHandle } from "@/components/vision/HazardMap";
 import { NewsGrid } from "@/components/vision/NewsGrid";
 import { fetchVideos, streamFeeds } from "@/lib/vision/api";
-import type { FeedItem, VideoItem } from "@/lib/vision/types";
+import type { FeedItem, VideoItem, VisionTab } from "@/lib/vision/types";
 
 export default function VisionDashboard() {
+  const [activeTab, setActiveTab] = useState<VisionTab>("news");
   const [feeds, setFeeds] = useState<FeedItem[] | null>(null);
   const [feedsError, setFeedsError] = useState(false);
   const [feedsLoading, setFeedsLoading] = useState(true);
@@ -148,47 +150,58 @@ export default function VisionDashboard() {
         "bg-[radial-gradient(1200px_600px_at_10%_-10%,rgba(56,189,248,0.06),transparent_60%),radial-gradient(1000px_500px_at_110%_0%,rgba(249,115,22,0.05),transparent_60%)]",
       ].join(" ")}
     >
-      <Header refreshing={refreshing} onRefresh={handleRefresh} />
+      <Header
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
+      />
 
       <main>
-        <HazardMap
-          ref={hazardMapRef}
-          feeds={feeds}
-          feedsError={feedsError}
-          feedsLoading={feedsLoading}
-          refreshing={refreshing}
-          selectedCountry={selectedCountry}
-          onCountrySelect={handleCountrySelect}
-        />
+        {activeTab === "news" ? (
+          <>
+            <HazardMap
+              ref={hazardMapRef}
+              feeds={feeds}
+              feedsError={feedsError}
+              feedsLoading={feedsLoading}
+              refreshing={refreshing}
+              selectedCountry={selectedCountry}
+              onCountrySelect={handleCountrySelect}
+            />
 
-        {feeds && feeds.length > 0 ? (
-          <FilterBar
-            search={search}
-            onSearchChange={setSearch}
-            selectedCountry={selectedCountry}
-            onCountryClear={() => setSelectedCountry(null)}
-            minImportance={minImportance}
-            onMinImportanceChange={setMinImportance}
-            categoryFilter={categoryFilter}
-            onCategoryFilterChange={setCategoryFilter}
-            categories={allCategories}
-            resultCount={filteredFeeds?.length ?? 0}
-            totalCount={feeds.length}
-          />
-        ) : null}
+            {feeds && feeds.length > 0 ? (
+              <FilterBar
+                search={search}
+                onSearchChange={setSearch}
+                selectedCountry={selectedCountry}
+                onCountryClear={() => setSelectedCountry(null)}
+                minImportance={minImportance}
+                onMinImportanceChange={setMinImportance}
+                categoryFilter={categoryFilter}
+                onCategoryFilterChange={setCategoryFilter}
+                categories={allCategories}
+                resultCount={filteredFeeds?.length ?? 0}
+                totalCount={feeds.length}
+              />
+            ) : null}
 
-        <NewsGrid
-          feeds={filteredFeeds}
-          feedsError={feedsError}
-          feedsLoading={feedsLoading && feeds === null}
-          feedsLive={feedsLive}
-          feedsPulsing={feedsPulsing}
-          selectedCountry={selectedCountry}
-          videos={videos}
-          videosError={videosError}
-          videosLive={videosLive}
-          videosPulsing={videosPulsing}
-        />
+            <NewsGrid
+              feeds={filteredFeeds}
+              feedsError={feedsError}
+              feedsLoading={feedsLoading && feeds === null}
+              feedsLive={feedsLive}
+              feedsPulsing={feedsPulsing}
+              selectedCountry={selectedCountry}
+              videos={videos}
+              videosError={videosError}
+              videosLive={videosLive}
+              videosPulsing={videosPulsing}
+            />
+          </>
+        ) : (
+          <ChatView />
+        )}
       </main>
     </div>
   );
